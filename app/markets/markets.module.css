@@ -1,0 +1,158 @@
+.page {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--space-12) var(--gutter) var(--space-24);
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+  animation: rise var(--duration-entrance) var(--ease-entrance) both;
+}
+
+.title {
+  font-size: var(--text-h1-size);
+  line-height: var(--text-h1-leading);
+  font-weight: var(--weight-medium);
+  max-width: 24ch;
+}
+
+.lede {
+  font-size: var(--text-body-l-size);
+  line-height: var(--text-body-leading);
+  color: var(--color-text-muted);
+  max-width: 62ch;
+}
+
+.rate {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
+  padding-top: var(--space-4);
+  border-top: var(--border);
+  animation: rise var(--duration-entrance) var(--ease-entrance) both;
+  animation-delay: 60ms;
+}
+
+.rateLabel {
+  font-size: var(--text-label-size);
+  line-height: var(--text-tight-leading);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.rateValue {
+  font-family: var(--font-mono);
+  font-size: var(--text-data-size);
+  line-height: var(--text-tight-leading);
+  font-weight: var(--weight-medium);
+}
+
+.rateNotice {
+  font-size: var(--text-data-size);
+  line-height: var(--text-tight-leading);
+  color: var(--color-notice);
+}
+
+.footnote {
+  margin-top: var(--space-4);
+  font-size: var(--text-data-size);
+  line-height: var(--text-body-leading);
+  color: var(--color-text-muted);
+  max-width: 72ch;
+  animation: rise var(--duration-entrance) var(--ease-entrance) both;
+  animation-delay: 60ms;
+}
+
+/*
+ * Colour-only modifier, so it can pair with .footnote without also overriding its
+ * line height. It has to come after .footnote to win the colour.
+ */
+.notice {
+  color: var(--color-notice);
+}
+
+/*
+ * The two groups. The gap between them does real work — it is what tells someone
+ * the second set is a different kind of thing before they read the line saying
+ * so. Neither group animates as a block; the cards stagger themselves, and each
+ * group staggers from its own first card.
+ */
+.group {
+  margin-top: var(--space-12);
+}
+
+.groupTitle {
+  font-size: var(--text-h3-size);
+  line-height: var(--text-h3-leading);
+  font-weight: var(--weight-semibold);
+}
+
+.groupNote {
+  margin-top: var(--space-2);
+  margin-bottom: var(--space-6);
+  font-size: var(--text-data-size);
+  line-height: var(--text-body-leading);
+  color: var(--color-text-muted);
+  max-width: 72ch;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--gutter);
+}
+
+.grid > * {
+  grid-column: span 4;
+}
+
+@media (max-width: 1024px) {
+  .grid > * {
+    grid-column: span 6;
+  }
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding: var(--space-8) var(--gutter-mobile) var(--space-16);
+  }
+
+  .title {
+    font-size: var(--text-h2-size);
+    line-height: var(--text-h2-leading);
+  }
+
+  .header {
+    margin-bottom: var(--space-4);
+  }
+
+  .group {
+    margin-top: var(--space-8);
+  }
+
+  .grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--space-4);
+  }
+
+  .grid > * {
+    grid-column: span 4;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
