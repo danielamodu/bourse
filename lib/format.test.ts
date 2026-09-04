@@ -1,19 +1,25 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  formatAddressShort,
+  formatBourseFee,
+  formatChainName,
+  formatConnectorName,
+  formatCostBps,
   formatFeedAge,
-  formatImpactBps,
   formatNGN,
   formatNGNAmount,
   formatPremiumBps,
   formatQuoteCountdown,
   formatShares,
+  formatSpread,
   formatUSD,
   NGN_PLACEHOLDER,
   parseNgnAmount,
   SHARES_PLACEHOLDER,
   USD_PLACEHOLDER,
 } from "./format";
+import { USDC_ADDRESS } from "@/lib/tokens";
 
 const RATE = 1_500;
 
@@ -171,30 +177,89 @@ describe("formatPremiumBps", () => {
   });
 });
 
-describe("formatImpactBps", () => {
-  it("states impact unsigned, because it is only ever a cost", () => {
-    expect(formatImpactBps(20)).toBe("0.20%");
-    expect(formatImpactBps(3_333)).toBe("33.33%");
+describe("formatCostBps", () => {
+  it("states a cost unsigned, because it is only ever a cost", () => {
+    expect(formatCostBps(20)).toBe("0.20%");
+    expect(formatCostBps(3_333)).toBe("33.33%");
     // A "+" here would read as movement in the user's favour.
-    expect(formatImpactBps(20).startsWith("+")).toBe(false);
+    expect(formatCostBps(20).startsWith("+")).toBe(false);
   });
 
-  it("states an impact below a basis point as a threshold, not as zero", () => {
-    // `priceImpactBps` rounds a cost up, so a zero arriving here means the route
+  it("states the measured band as plain percentages", () => {
+    // 58 to 105bps across the four live tokens. This is what the row prints in
+    // practice — the threshold branch below is the rare case, not this one.
+    expect(formatCostBps(58)).toBe("0.58%");
+    expect(formatCostBps(62)).toBe("0.62%");
+    expect(formatCostBps(90)).toBe("0.90%");
+    expect(formatCostBps(105)).toBe("1.05%");
+  });
+
+  it("states a cost below a basis point as a threshold, not as zero", () => {
+    // `executionCostBps` rounds a cost up, so a zero arriving here means the route
     // costs less than two decimal places can state — including the clamped case,
     // where the two price lookups disagreed in the user's favour. An exact
     // "0.00%" between real naira figures reads as a figure that failed to load,
     // and "—" is reserved for exactly that.
-    expect(formatImpactBps(0)).toBe("under 0.01%");
-    expect(formatImpactBps(-50)).toBe("under 0.01%");
+    //
+    // Unreachable for a market spread at real sizes: nothing in the 58 to 105bps
+    // band lands here. It survives for the clamped unpriced-leg case, which is why
+    // the branch is kept and why it is not the case the row is designed around.
+    expect(formatCostBps(0)).toBe("under 0.01%");
+    expect(formatCostBps(-50)).toBe("under 0.01%");
 
     // One basis point is the first figure it can state outright.
-    expect(formatImpactBps(1)).toBe("0.01%");
+    expect(formatCostBps(1)).toBe("0.01%");
   });
 
   it("returns a dash when the route carried no figure", () => {
-    expect(formatImpactBps(null)).toBe("—");
-    expect(formatImpactBps(Number.NaN)).toBe("—");
+    expect(formatCostBps(null)).toBe("—");
+    expect(formatCostBps(Number.NaN)).toBe("—");
+  });
+});
+
+describe("formatSpread", () => {
+  it("leads with the naira figure and puts the percentage beside it", () => {
+    // ₦525 on a ₦50,000 ticket at 105bps. The naira figure comes first because it
+    // is the one a person can weigh against what they were about to spend; 1.05%
+    // of ₦50,000 is arithmetic they would have to do.
+    const spread = formatSpread(525, 105);
+
+    expect(spread).toBe(`${formatNGNAmount(525)} (1.05%)`);
+    expect(spread.indexOf("525")).toBeLessThan(spread.indexOf("1.05"));
+  });
+
+  it("states the percentage alone when there is no rate yet", () => {
+    // The cost is known either way, so the row says what it knows rather than
+    // going blank.
+    expect(formatSpread(null, 105)).toBe("1.05%");
+    expect(formatSpread(Number.NaN, 58)).toBe("0.58%");
+  });
+
+  it("falls back to a dash when there is no figure at all", () => {
+    // A naira spread with no percentage cannot arise: `spreadNgn` is derived from
+    // the bps figure, so it is null whenever that is. Only the both-null case is
+    // reachable, and it is the one the row starts in.
+    expect(formatSpread(null, null)).toBe("—");
+  });
+});
+
+describe("formatBourseFee", () => {
+  it("reads zero as a statement, not as a missing figure", () => {
+    // "₦0.00" in a column of naira amounts looks like a rounding artefact or a
+    // failed load. "None" says we are not charging for this.
+    expect(formatBourseFee(0)).toBe("None");
+    expect(formatBourseFee(-0)).toBe("None");
+  });
+
+  it("formats a fee once there is one", () => {
+    // The line people have always seen, the day it says something else.
+    expect(formatBourseFee(125)).toBe(formatNGNAmount(125));
+    expect(formatBourseFee(1_250)).toBe(formatNGNAmount(1_250));
+  });
+
+  it("returns the placeholder when there is no quote to take a figure from", () => {
+    expect(formatBourseFee(null)).toBe(NGN_PLACEHOLDER);
+    expect(formatBourseFee(Number.NaN)).toBe(NGN_PLACEHOLDER);
   });
 });
 
@@ -293,5 +358,91 @@ describe("parseNgnAmount", () => {
     for (const value of ["abc", "1e3", "50k", "5.0.0", "50,00.0.1", "1/2"]) {
       expect(parseNgnAmount(value), value).toBeNull();
     }
+  });
+});
+
+describe("formatAddressShort", () => {
+  it("shortens an address to both ends", () => {
+    // Enough of each end to recognise a wallet you have seen before, which is all
+    // this is for — it confirms which account is connected.
+    expect(formatAddressShort(USDC_ADDRESS)).toBe("0x8335…2913");
+    expect(formatAddressShort(USDC_ADDRESS)).toContain(USDC_ADDRESS.slice(0, 6));
+    expect(formatAddressShort(USDC_ADDRESS)).toContain(USDC_ADDRESS.slice(-4));
+  });
+
+  it("keeps the casing it was given", () => {
+    // Never lowercased: EIP-55 casing is the only thing a person could check by
+    // eye against their wallet, and re-casing it would remove that.
+    expect(formatAddressShort(USDC_ADDRESS.toLowerCase())).toBe("0x8335…2913");
+    expect(formatAddressShort("0xAbCdEf0123456789012345678901234567890123")).toBe(
+      "0xAbCd…0123",
+    );
+  });
+
+  it("returns anything that is not address-shaped unchanged", () => {
+    // Truncating a non-address into something that looks like one would be worse
+    // than printing it: it would look verified.
+    for (const value of ["", "0x", "not an address", "0x1234", `${USDC_ADDRESS}00`]) {
+      expect(formatAddressShort(value), JSON.stringify(value)).toBe(value);
+    }
+  });
+
+  it("returns a dash when no wallet is connected", () => {
+    expect(formatAddressShort(null)).toBe("—");
+  });
+});
+
+describe("formatChainName", () => {
+  it("names the networks a wallet is likely to be on", () => {
+    expect(formatChainName(8453)).toBe("Base");
+    expect(formatChainName(1)).toBe("Ethereum");
+    expect(formatChainName(137)).toBe("Polygon");
+    expect(formatChainName(84_532)).toBe("Base Sepolia");
+  });
+
+  it("states an unknown id as a number rather than guessing", () => {
+    // "network 1868" is a fact the user can act on or read out, and it does not
+    // claim we know what we do not. Cosmetic either way: the one action offered
+    // beside this sentence is switching to Base, whatever the answer.
+    expect(formatChainName(1_868)).toBe("network 1868");
+    expect(formatChainName(0)).toBe("network 0");
+  });
+
+  it("says another network when no chain was reported", () => {
+    // The sentence still has to work.
+    expect(formatChainName(null)).toBe("another network");
+    expect(formatChainName(Number.NaN)).toBe("another network");
+    expect(formatChainName(8_453.5)).toBe("another network");
+  });
+});
+
+describe("formatConnectorName", () => {
+  it("names the generic injected connector after where to find it", () => {
+    // wagmi calls it "Injected", which is a word from EIP-1193 and not a wallet
+    // anyone recognises. The button has to say where their wallet is.
+    expect(formatConnectorName("Injected")).toBe("Browser Wallet");
+  });
+
+  it("leaves a wallet that named itself alone", () => {
+    // EIP-6963 discovery gives one connector per installed wallet, each reporting
+    // its own name. That name is what the user will see again inside the wallet
+    // when it asks them to approve, so rewriting it would break the match.
+    for (const name of ["MetaMask", "Trust Wallet", "Rabby", "Coinbase Wallet"]) {
+      expect(formatConnectorName(name)).toBe(name);
+    }
+  });
+
+  it("trims, and treats a nameless connector as the browser one", () => {
+    // An unlabelled button is the same problem as a badly labelled one.
+    expect(formatConnectorName("  MetaMask  ")).toBe("MetaMask");
+    expect(formatConnectorName("")).toBe("Browser Wallet");
+    expect(formatConnectorName("   ")).toBe("Browser Wallet");
+  });
+
+  it("does not rewrite a name that merely contains the word", () => {
+    // Only the exact generic name is ours to replace. A wallet actually called
+    // "Injected Wallet" would be a real product with a real name.
+    expect(formatConnectorName("Injected Wallet")).toBe("Injected Wallet");
+    expect(formatConnectorName("injected")).toBe("injected");
   });
 });

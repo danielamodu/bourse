@@ -14,8 +14,9 @@ import {
  * KyberSwap aggregator quotes. USDC in, tokenized stock out.
  *
  * Read-only. This module asks what a trade would cost and nothing else — no
- * approval, no signature, no submission. `routerAddress` comes back and is
- * recorded rather than used.
+ * approval, no signature, no submission. The router the response names is
+ * checked against an address pinned here rather than carried through on trust —
+ * see {@link KYBERSWAP_ROUTER_ADDRESS}.
  *
  * WHY KYBERSWAP: 0x is compliance-blocked for tokenized equities and answers a
  * quote request for these tokens with `BUY_TOKEN_NOT_AUTHORIZED_FOR_TRADE`. That
@@ -41,19 +42,74 @@ import {
 export const KYBERSWAP_ROUTES_URL =
   "https://aggregator-api.kyberswap.com/base/api/v1/routes";
 
+/**
+ * The router every KyberSwap route on Base executes through, pinned.
+ *
+ * WHY THIS IS A CONSTANT AND NOT A FIELD WE READ. In Part B this address is the
+ * spender of a user's USDC allowance. An allowance is granted to whatever address
+ * the approval names, so if the spender came from the quote response, then
+ * whoever could shape that response — a compromised endpoint, a hijacked DNS
+ * answer, a proxy on a Lagos mobile network — could name a contract of their own
+ * and receive an allowance over the user's USDC. That is the worst outcome this
+ * app can produce. It is worse than a bad price, because a bad price costs one
+ * ticket and is visible in the panel, while an allowance is invisible after the
+ * fact, survives the session, and keeps draining every USDC the wallet ever holds.
+ *
+ * So the response's own `routerAddress` is treated as an echo to check, exactly
+ * like `tokenIn`, `tokenOut` and `amountIn`: it has to match this, or there is no
+ * quote. Comparison is case-insensitive because EIP-55 checksum casing is
+ * cosmetic and KyberSwap returns this one lowercase.
+ *
+ * PROVENANCE: observed by `npm run verify:quote` on 2026-09-04 as the router for
+ * all four tradeable tokens, and asserted to have bytecode by
+ * `npm run verify:chain`. It is an ordinary contract, not a B20 precompile, so
+ * `isValidTokenAddress` does not and must not apply to it.
+ */
+export const KYBERSWAP_ROUTER_ADDRESS =
+  "0x61354c7f0345dfb519b79dbddca059db53f237b5";
+
+/**
+ * Detail strings for the two ways the router check can fail. Distinct constants
+ * so a log line, a test, or a later alert can match the case exactly instead of
+ * pattern-matching prose.
+ */
+export const ROUTER_MISMATCH_DETAIL = "router-address-mismatch";
+export const ROUTER_ABSENT_DETAIL = "router-address-absent";
+
+/**
+ * Bourse's own fee, in basis points. Zero.
+ *
+ * The plumbing exists at zero on purpose. `bourseFeeParams` below only attaches
+ * KyberSwap's fee parameters when this is above zero, so switching a fee on is a
+ * one-line change to a request shape that is already tested, rather than a new
+ * integration written under time pressure. And the panel renders a Bourse fee
+ * line at every value including this one: a user who has always seen "None" on
+ * that line will see the day it changes, whereas a line that appears for the
+ * first time alongside a number reads as a charge that was hidden until now.
+ *
+ * Typed `number` rather than left as the literal `0` so both branches of the fee
+ * plumbing stay live code that the compiler checks.
+ */
+export const BOURSE_FEE_BPS: number = 0;
+
 /** How long a quote is presented as current. Also the refetch interval. */
 export const QUOTE_TTL_MS = 30_000;
 
 /**
- * Most a route may cost in slippage before we stop calling a token buyable.
+ * Most a route may cost before we stop calling a token buyable, in basis points.
  *
- * 3% is deliberately loose for a ₦50,000 ticket — about $30, which is noise even
- * in a shallow pool — so a token failing this is genuinely unbuyable rather than
- * merely thin. Tradeability is measured at the user's real order size, so a large
- * order can fail the budget on a token a small order passes on. That is the
- * correct behaviour and not a bug to smooth over.
+ * 3% is deliberately loose. Measured against real routes it is not close: the
+ * four tradeable tokens came back between 58 and 105bps at a ₦50,000 ticket, and
+ * the same tokens quoted the same rate to five significant figures at $30 and at
+ * $500 — so almost none of that cost is size-dependent slippage. What the budget
+ * actually catches is a token whose only route is priced absurdly, which is the
+ * thing that separates unbuyable from merely thin.
+ *
+ * Still measured at the user's real order size, so a large order can fail the
+ * budget on a token a small order passes on. That is correct behaviour, not a bug
+ * to smooth over.
  */
-export const PRICE_IMPACT_BUDGET_BPS = 300;
+export const EXECUTION_COST_BUDGET_BPS = 300;
 
 const REQUEST_TIMEOUT_MS = 12_000;
 
@@ -84,6 +140,75 @@ function clientId(): string {
   return process.env.KYBERSWAP_CLIENT_ID ?? "bourse";
 }
 
+/**
+ * Where a Bourse fee would be paid, from the environment.
+ *
+ * No address that receives money goes in the repo. It is deployment
+ * configuration, and an address in source is an address nobody machine-verified —
+ * which is the rule the whole registry is built on. Read inside the request for
+ * the same reason as {@link clientId}.
+ */
+function feeReceiver(): string | null {
+  const value = process.env.BOURSE_FEE_RECEIVER;
+  if (value === undefined) return null;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+export type FeeParams =
+  /** No fee to charge, so nothing is attached to the request. */
+  | { kind: "none" }
+  | { kind: "params"; params: Record<string, string> }
+  /** A fee is configured with nowhere to send it. Refuse rather than guess. */
+  | { kind: "misconfigured"; detail: string };
+
+/**
+ * KyberSwap's fee parameters, or nothing.
+ *
+ * Pure and separate from `requestQuote` so both branches are covered offline —
+ * the shape of a request Bourse has never sent in anger is exactly the thing that
+ * should be pinned by a test rather than discovered on the day a fee is switched
+ * on.
+ *
+ * At zero the parameters are omitted entirely rather than sent as `feeAmount=0`.
+ * A fee of zero to no receiver is not a fee, and sending it invites the
+ * aggregator to reject the request or, worse, to quote one with a fee routed
+ * nowhere.
+ *
+ * `chargeFeeBy: "currency_in"` takes the fee from the USDC going in, so it sits
+ * inside the amount the user already agreed to pay instead of quietly reducing
+ * the share count they were shown. That is what lets the panel state one total
+ * and one number of shares.
+ */
+export function bourseFeeParams(bps: number, receiver: string | null): FeeParams {
+  if (!Number.isFinite(bps) || bps <= 0) return { kind: "none" };
+
+  if (!Number.isInteger(bps)) {
+    return {
+      kind: "misconfigured",
+      detail: `BOURSE_FEE_BPS must be a whole number of basis points, got ${bps}`,
+    };
+  }
+
+  if (receiver === null) {
+    return {
+      kind: "misconfigured",
+      detail:
+        "BOURSE_FEE_BPS is above zero but BOURSE_FEE_RECEIVER is not set, so the fee has nowhere to go",
+    };
+  }
+
+  return {
+    kind: "params",
+    params: {
+      feeAmount: String(bps),
+      isInBps: "true",
+      chargeFeeBy: "currency_in",
+      feeReceiver: receiver,
+    },
+  };
+}
+
 /** A priced route. Every figure here is an estimate, and the UI says so. */
 export type Quote = {
   symbol: QuotableSymbol;
@@ -98,14 +223,30 @@ export type Quote = {
   /** What a share costs on this route: `usdIn / shares`. */
   usdPerShare: number;
   /**
-   * Value given up crossing the pool, in basis points. Null when the aggregator
-   * did not price both legs, which reads as unknown and never as zero.
+   * What crossing the market costs, in basis points of the amount paid: the gap
+   * between the dollars going in and the dollars of stock coming out.
+   *
+   * NOT price impact, despite what an aggregator field name might suggest. It
+   * bundles the pool fee, the bid-ask spread and any disagreement between the
+   * two price lookups the aggregator used to value the legs. Size-dependent
+   * slippage is a small part of it and often none of it: the same tokens quoted
+   * the same rate to five significant figures at $30 and at $500 while this
+   * figure sat between 58 and 105bps. The UI calls it market spread for that
+   * reason.
+   *
+   * Null when the aggregator did not price both legs, which reads as unknown and
+   * never as zero.
    */
-  priceImpactBps: number | null;
+  executionCostBps: number | null;
   /** Gas the aggregator estimates for this route, in USD. Null when absent. */
   gasUsd: number | null;
-  /** The router this route would execute through. Recorded, never called here. */
-  routerAddress: string | null;
+  /**
+   * The router this route executes through. Never null on a quote that exists:
+   * a response naming anything but {@link KYBERSWAP_ROUTER_ADDRESS}, or naming
+   * nothing, is a `failed` result rather than a quote. The type says so, so that
+   * Part B cannot be written against a router this module never checked.
+   */
+  routerAddress: string;
   receivedAtMs: number;
   /** `receivedAtMs + QUOTE_TTL_MS`. Past this the panel stops presenting it. */
   expiresAtMs: number;
@@ -161,6 +302,19 @@ export async function requestQuote(
   // Without this the response carries no gas estimate, and estimated gas is one
   // of the figures the trade panel is required to show.
   url.searchParams.set("gasInclude", "true");
+
+  const fee = bourseFeeParams(BOURSE_FEE_BPS, feeReceiver());
+  if (fee.kind === "misconfigured") {
+    // Refused before the request goes out. A fee we cannot deliver is a
+    // deployment mistake, and quoting around it would hide it until someone
+    // reconciled receipts that never arrived.
+    return { kind: "failed", detail: fee.detail };
+  }
+  if (fee.kind === "params") {
+    for (const [key, value] of Object.entries(fee.params)) {
+      url.searchParams.set(key, value);
+    }
+  }
 
   let response: Response;
   try {
@@ -314,6 +468,43 @@ function interpret(body: unknown, ctx: InterpretContext): QuoteResult {
     };
   }
 
+  /*
+   * The fourth echo guard, and the one with the most at stake.
+   *
+   * `tokenIn`, `tokenOut` and `amountIn` above check that the answer is about the
+   * question. This checks the router the route would execute through, because that
+   * address becomes the spender of a USDC allowance in Part B. A response is not
+   * allowed to name its own spender — see {@link KYBERSWAP_ROUTER_ADDRESS} for why
+   * that is the worst thing this app could get wrong.
+   *
+   * Absence fails closed alongside mismatch. It has to: a response that stopped
+   * naming a router is a response whose route we can no longer tie to the address
+   * we pinned, and "we could not get a price, try again" is the honest outcome of
+   * that. The cost of the choice is real — if KyberSwap ever drops the field,
+   * every quote fails until we notice — and `verify:quote` is what would surface
+   * it, deliberately, instead of a user's allowance doing so.
+   */
+  const echoedRouter =
+    typeof summary.routerAddress === "string"
+      ? summary.routerAddress
+      : typeof envelope.data?.routerAddress === "string"
+        ? envelope.data.routerAddress
+        : null;
+
+  if (echoedRouter === null) {
+    return {
+      kind: "failed",
+      detail: `${ROUTER_ABSENT_DETAIL}: response named no router, expected ${KYBERSWAP_ROUTER_ADDRESS}`,
+    };
+  }
+
+  if (!sameAddress(echoedRouter, KYBERSWAP_ROUTER_ADDRESS)) {
+    return {
+      kind: "failed",
+      detail: `${ROUTER_MISMATCH_DETAIL}: response named ${echoedRouter}, pinned ${KYBERSWAP_ROUTER_ADDRESS}`,
+    };
+  }
+
   return {
     kind: "quote",
     quote: {
@@ -323,17 +514,14 @@ function interpret(body: unknown, ctx: InterpretContext): QuoteResult {
       unitsOut,
       shares,
       usdPerShare: usdIn / shares,
-      priceImpactBps: priceImpactBps(
+      executionCostBps: executionCostBps(
         toFiniteNumber(summary.amountInUsd),
         toFiniteNumber(summary.amountOutUsd),
       ),
       gasUsd: toFiniteNumber(summary.gasUsd),
-      routerAddress:
-        typeof summary.routerAddress === "string"
-          ? summary.routerAddress
-          : typeof envelope.data?.routerAddress === "string"
-            ? envelope.data.routerAddress
-            : null,
+      // The echoed value, now known to be the pinned one bar casing. Kept as
+      // received so a log line shows what the aggregator actually said.
+      routerAddress: echoedRouter,
       receivedAtMs: ctx.nowMs,
       expiresAtMs: ctx.nowMs + QUOTE_TTL_MS,
     },
@@ -341,25 +529,31 @@ function interpret(body: unknown, ctx: InterpretContext): QuoteResult {
 }
 
 /**
- * Value given up crossing the pool, in basis points, from the aggregator's own
- * valuation of both legs.
+ * What crossing the market costs, in basis points, from the aggregator's own
+ * valuation of both legs: `(usdIn - usdOut) / usdIn`.
  *
- * Null rather than zero when either leg is unpriced: "we do not know the impact"
- * and "the impact is nil" are different statements, and only one of them should
- * ever let a buy affordance render.
+ * Named for what it measures. It is not price impact — it bundles the pool fee,
+ * the spread and any disagreement between the two price lookups used to value the
+ * legs, and on real routes almost none of it moves with order size. The panel
+ * labels it market spread.
+ *
+ * Null rather than zero when either leg is unpriced: "we do not know what this
+ * costs" and "it costs nothing" are different statements, and only one of them
+ * should ever let a buy affordance render.
  *
  * Rounded up to a whole basis point rather than to the nearest one — the contract
  * is stated on {@link ceilBps}. `Math.round` reported half a basis point of cost
- * as none at all, and a tenth of one likewise, which reads as a free route; a cost
- * this function cannot state precisely is stated high. Zero is therefore reserved
- * for a route with no measurable cost, and `formatImpactBps` renders it as a
- * threshold rather than as an exact `0.00%`.
+ * as none at all, which reads as a free route; a cost this function cannot state
+ * precisely is stated high. Zero is therefore reserved for a route with no
+ * measurable cost, and `formatCostBps` renders it as a threshold rather than as an
+ * exact `0.00%`. On the four real routes that branch does not arise — they measure
+ * 58 to 105bps — so it is the rare case, not the common one.
  *
  * A negative result is clamped to zero. It means the aggregator valued the output
  * slightly above the input, which is two independent price lookups disagreeing —
  * not a gain, and not something to display as one.
  */
-export function priceImpactBps(
+export function executionCostBps(
   usdIn: number | null,
   usdOut: number | null,
 ): number | null {
@@ -403,6 +597,75 @@ export function ngnToUsdcUnits(
   return BigInt(units);
 }
 
+/**
+ * Longest `amountIn` string `parseQuoteParams` will even look at.
+ *
+ * The band's ceiling is 13 digits, so 24 is far past anything real and still
+ * short enough that `BigInt()` is never handed a multi-kilobyte run of digits to
+ * convert before the band check can reject it — conversion cost grows faster than
+ * the input, and this is an unauthenticated endpoint that forwards to a third
+ * party under our client id. The cheap rejection goes first.
+ */
+const MAX_AMOUNT_IN_DIGITS = 24;
+
+export type QuoteParams =
+  | { ok: true; symbol: QuotableSymbol; usdcIn: bigint }
+  /** Reason to hand back verbatim as a 400. Names the parameter at fault. */
+  | { ok: false; reason: string };
+
+/**
+ * Validates the query string `/api/quote` was called with.
+ *
+ * Pure and here rather than in the route so it is covered by the offline suite —
+ * the route itself cannot be exercised without `next/server`, and this is the part
+ * with the decisions in it.
+ *
+ * `symbol` has to be one of the four we hold an address for; a stock we know but
+ * cannot quote is rejected by name, because "MSFT is not quotable" and "ZZZZ is
+ * not a stock" are different mistakes. `amountIn` is USDC base units as an
+ * integer string, bounded at both ends by the band the hook checks against
+ * before it ever sends a request.
+ */
+export function parseQuoteParams(params: URLSearchParams): QuoteParams {
+  const symbol = params.get("symbol");
+  if (symbol === null || !isStockSymbol(symbol)) {
+    return { ok: false, reason: "symbol must be one of the listed stocks" };
+  }
+  if (!isQuotableSymbol(symbol)) {
+    return {
+      ok: false,
+      reason: `${symbol} has no token address on Base, so it cannot be quoted`,
+    };
+  }
+
+  const amountIn = params.get("amountIn");
+  if (
+    amountIn === null ||
+    amountIn.length === 0 ||
+    amountIn.length > MAX_AMOUNT_IN_DIGITS ||
+    !/^\d+$/.test(amountIn)
+  ) {
+    // One message for every malformed shape: a negative, a decimal, `1e7`, `+30`,
+    // an empty string and a kilobyte of digits are all "not an integer number of
+    // base units", and enumerating them back to a caller only helps someone
+    // probing the endpoint.
+    return {
+      ok: false,
+      reason: "amountIn must be an integer number of USDC base units",
+    };
+  }
+
+  const usdcIn = BigInt(amountIn);
+  if (usdcIn < MIN_QUOTE_USDC_UNITS || usdcIn > MAX_QUOTE_USDC_UNITS) {
+    return {
+      ok: false,
+      reason: `amountIn must be between ${MIN_QUOTE_USDC_UNITS} and ${MAX_QUOTE_USDC_UNITS} USDC base units`,
+    };
+  }
+
+  return { ok: true, symbol, usdcIn };
+}
+
 /* ------------------------------------------------------------------ *
  * The browser seam.
  *
@@ -424,9 +687,9 @@ export type QuoteWire = {
   unitsOut: string;
   shares: number;
   usdPerShare: number;
-  priceImpactBps: number | null;
+  executionCostBps: number | null;
   gasUsd: number | null;
-  routerAddress: string | null;
+  routerAddress: string;
   receivedAtMs: number;
   expiresAtMs: number;
 };
@@ -451,7 +714,7 @@ export function toQuoteWire(result: QuoteResult): QuoteResultWire {
     unitsOut: quote.unitsOut.toString(),
     shares: quote.shares,
     usdPerShare: quote.usdPerShare,
-    priceImpactBps: quote.priceImpactBps,
+    executionCostBps: quote.executionCostBps,
     gasUsd: quote.gasUsd,
     routerAddress: quote.routerAddress,
     receivedAtMs: quote.receivedAtMs,
@@ -530,6 +793,25 @@ export function parseQuoteWire(value: unknown): QuoteResult {
     return { kind: "failed", detail: "quote payload was incomplete" };
   }
 
+  // The router is re-checked on the way in, not just on the way out. The payload
+  // travelled a second network hop to get here, and this is the last boundary
+  // before a `Quote` object exists in the browser — the object Part B will read a
+  // spender out of. Same pin, same case-insensitive comparison, same fail-closed
+  // treatment of absence.
+  const routerAddress = value.routerAddress;
+  if (
+    typeof routerAddress !== "string" ||
+    !sameAddress(routerAddress, KYBERSWAP_ROUTER_ADDRESS)
+  ) {
+    return {
+      kind: "failed",
+      detail:
+        typeof routerAddress === "string"
+          ? ROUTER_MISMATCH_DETAIL
+          : ROUTER_ABSENT_DETAIL,
+    };
+  }
+
   return {
     kind: "quote",
     quote: {
@@ -539,10 +821,9 @@ export function parseQuoteWire(value: unknown): QuoteResult {
       unitsOut,
       shares,
       usdPerShare,
-      priceImpactBps: toFiniteNumber(value.priceImpactBps),
+      executionCostBps: toFiniteNumber(value.executionCostBps),
       gasUsd: toFiniteNumber(value.gasUsd),
-      routerAddress:
-        typeof value.routerAddress === "string" ? value.routerAddress : null,
+      routerAddress,
       receivedAtMs,
       expiresAtMs,
     },

@@ -4,10 +4,10 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { TradePanel } from "@/components/TradePanel";
+import { WalletConnect } from "@/components/WalletConnect";
 import { useClock } from "@/hooks/useClock";
 import { useQuote } from "@/hooks/useQuote";
 import { useStockPrices } from "@/hooks/useStockPrices";
-import { useTokenDecimals } from "@/hooks/useTokenDecimals";
 import { cx } from "@/lib/cx";
 import {
   formatFeedAge,
@@ -40,14 +40,12 @@ const DEFAULT_AMOUNT = "50,000";
 export function TradeDetail({ symbol }: { symbol: StockSymbol }) {
   const token = STOCK_TOKENS[symbol];
   const { prices, ngnRate } = useStockPrices();
-  const { decimals } = useTokenDecimals();
   const nowMs = useClock();
 
   const [amount, setAmount] = useState(DEFAULT_AMOUNT);
   const ngn = parseNgnAmount(amount);
 
   const price = prices[symbol];
-  const tokenDecimals = decimals[symbol];
   const age = formatFeedAge(price.updatedAt, nowMs);
 
   const quote = useQuote({
@@ -94,6 +92,8 @@ export function TradeDetail({ symbol }: { symbol: StockSymbol }) {
         referenceAge={age}
       />
 
+      <WalletConnect />
+
       <dl className={styles.facts}>
         <div className={styles.fact}>
           <dt className={styles.label}>Token contract</dt>
@@ -102,15 +102,17 @@ export function TradeDetail({ symbol }: { symbol: StockSymbol }) {
           </dd>
         </div>
 
+        {/* Read from the registry, not from a live call. The figure was read off each
+            contract by `npm run verify:chain` and recorded with that provenance, so a
+            second multicall on page load would add a round trip and — worse — a window
+            where this row and the share count above it disagreed. Null where the token
+            has no published address, because there was no contract to read it from. */}
         <div className={styles.fact}>
           <dt className={styles.label}>On-chain decimals</dt>
           <dd
-            className={cx(
-              styles.value,
-              tokenDecimals === undefined && styles.muted,
-            )}
+            className={cx(styles.value, token.decimals === null && styles.muted)}
           >
-            {tokenDecimals ?? "Not read yet"}
+            {token.decimals ?? "No contract to read yet"}
           </dd>
         </div>
 

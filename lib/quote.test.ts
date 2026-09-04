@@ -1,13 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BOURSE_FEE_BPS,
+  KYBERSWAP_ROUTER_ADDRESS,
   MAX_QUOTE_USDC_UNITS,
   MIN_QUOTE_USDC_UNITS,
   QUOTE_TTL_MS,
+  ROUTER_ABSENT_DETAIL,
+  ROUTER_MISMATCH_DETAIL,
+  bourseFeeParams,
+  executionCostBps,
   isQuoteExpired,
   ngnToUsdcUnits,
+  parseQuoteParams,
   parseQuoteWire,
-  priceImpactBps,
   quoteMsRemaining,
   requestQuote,
   toQuoteWire,
@@ -31,7 +37,16 @@ const USDC_IN = 30_000_000n;
 const UNITS_OUT = "5000000";
 const NOW = 1_757_000_000_000;
 
-const ROUTER = "0x6131B5fae19EA4f9D964eAc0408E4408b66337b5";
+/**
+ * The pinned router, not a fixture value.
+ *
+ * Deliberately the constant rather than a literal copied beside it. A fixture that
+ * spelled the address out would keep passing after the pin changed, which is the
+ * one thing these tests exist to catch: the router is the spender of a USDC
+ * allowance in Part B, so a test suite that goes green against a stale pin is worse
+ * than no suite.
+ */
+const ROUTER = KYBERSWAP_ROUTER_ADDRESS;
 
 type SummaryOverrides = Record<string, unknown>;
 
@@ -175,28 +190,28 @@ describe("requestQuote: a priced route", () => {
     expect(QUOTE_TTL_MS).toBe(30_000);
   });
 
-  it("derives price impact from the two USD legs", async () => {
+  it("derives the execution cost from the two USD legs", async () => {
     // $30 in, $29.94 out — 6 cents of 30 dollars, 20bps.
     const quote = expectQuote(await quoteFor(() => routed()));
-    expect(quote.priceImpactBps).toBe(20);
+    expect(quote.executionCostBps).toBe(20);
   });
 
-  it("leaves impact null when the aggregator priced only one leg", async () => {
+  it("leaves the cost null when the aggregator priced only one leg", async () => {
     const quote = expectQuote(
       await quoteFor(() => routed({ amountOutUsd: undefined })),
     );
 
     // Null, never zero: an unpriced leg is not a free trade, and only a real
     // number should let a buy affordance render.
-    expect(quote.priceImpactBps).toBeNull();
+    expect(quote.executionCostBps).toBeNull();
   });
 
-  it("clamps a negative impact to zero rather than showing a gain", async () => {
+  it("clamps a negative cost to zero rather than showing a gain", async () => {
     const quote = expectQuote(
       await quoteFor(() => routed({ amountOutUsd: "30.15" })),
     );
 
-    expect(quote.priceImpactBps).toBe(0);
+    expect(quote.executionCostBps).toBe(0);
   });
 
   it("reports gas as null when the response carries none", async () => {
@@ -376,10 +391,102 @@ describe("requestQuote: echo guards", () => {
   });
 });
 
-describe("priceImpactBps", () => {
+/**
+ * The router pin, checked at both boundaries it crosses.
+ *
+ * This is the guard with the most at stake in the file. In Part B the router is the
+ * spender of a user's USDC allowance, so a response that could name its own router
+ * could name a contract of its own and receive an allowance over every USDC the
+ * wallet will ever hold. Unlike a bad price, that is invisible after the fact and
+ * survives the session. So a response that names anything but the pin — or names
+ * nothing — is `failed`, and no quote reaches the panel from it.
+ */
+describe("the router pin", () => {
+  it("pins an address, not a shape", () => {
+    // Asserted here so the constant cannot be edited to something ill-formed
+    // without a test going red. Its authenticity comes from `verify:chain` proving
+    // it has bytecode and `verify:quote` seeing the live API name it — never from
+    // this file.
+    expect(KYBERSWAP_ROUTER_ADDRESS).toMatch(/^0x[0-9a-f]{40}$/);
+  });
+
+  it("refuses a route through any other router", async () => {
+    const attacker = "0xdead000000000000000000000000000000000beef";
+    const result = await quoteFor(() => routed({ routerAddress: attacker }));
+
+    expect(result.kind).toBe("failed");
+    if (result.kind === "failed") {
+      expect(result.detail).toContain(ROUTER_MISMATCH_DETAIL);
+      // The address it tried to name goes in the log line, so the case is
+      // diagnosable from a server log rather than only reproducible.
+      expect(result.detail).toContain(attacker);
+    }
+  });
+
+  it("refuses a route that names no router at all", async () => {
+    // Fails closed, deliberately, and the cost is real: if KyberSwap ever drops the
+    // field every quote fails until we notice. `verify:quote` is what surfaces that
+    // — instead of a user's allowance doing it.
+    const result = await quoteFor(() => routed({ routerAddress: undefined }));
+
+    expect(result.kind).toBe("failed");
+    if (result.kind === "failed") {
+      expect(result.detail).toContain(ROUTER_ABSENT_DETAIL);
+    }
+  });
+
+  it("refuses a router that is not a string", async () => {
+    for (const routerAddress of [null, 7, {}, [ROUTER]]) {
+      const result = await quoteFor(() => routed({ routerAddress }));
+      expect(result.kind, JSON.stringify(routerAddress)).toBe("failed");
+    }
+  });
+
+  it("accepts the pin in any casing", async () => {
+    // EIP-55 casing is cosmetic and KyberSwap returns this one lowercase, so
+    // comparing as given would reject every real response the day they checksum it.
+    const quote = expectQuote(
+      await quoteFor(() =>
+        routed({ routerAddress: ROUTER.toUpperCase().replace("0X", "0x") }),
+      ),
+    );
+
+    expect(quote.routerAddress.toLowerCase()).toBe(ROUTER.toLowerCase());
+  });
+
+  it("re-checks the pin on the way back into the browser", async () => {
+    // The payload takes a second network hop from our own route, and this is the
+    // last boundary before a `Quote` exists in the browser — the object Part B
+    // reads a spender out of.
+    const fields = await wireFields();
+
+    const swapped = parseQuoteWire({
+      ...fields,
+      routerAddress: "0xdead000000000000000000000000000000000beef",
+    });
+    expect(swapped.kind).toBe("failed");
+    if (swapped.kind === "failed") {
+      expect(swapped.detail).toBe(ROUTER_MISMATCH_DETAIL);
+    }
+
+    const absent = parseQuoteWire(without(fields, "routerAddress"));
+    expect(absent.kind).toBe("failed");
+    if (absent.kind === "failed") {
+      expect(absent.detail).toBe(ROUTER_ABSENT_DETAIL);
+    }
+
+    const recased = parseQuoteWire({
+      ...fields,
+      routerAddress: ROUTER.toUpperCase().replace("0X", "0x"),
+    });
+    expect(recased.kind).toBe("quote");
+  });
+});
+
+describe("executionCostBps", () => {
   it("measures the gap between the two USD legs", () => {
-    expect(priceImpactBps(30, 29.94)).toBe(20);
-    expect(priceImpactBps(30, 27)).toBe(1_000);
+    expect(executionCostBps(30, 29.94)).toBe(20);
+    expect(executionCostBps(30, 27)).toBe(1_000);
   });
 
   it("states a whole number of basis points as that whole number", () => {
@@ -388,28 +495,28 @@ describe("priceImpactBps", () => {
     // 19.999999999999574, which the ceiling lifts back to 20; this one comes out at
     // 10.000000000000379, and without `BPS_EPSILON` a route costing exactly 10bps
     // would be charged as 11.
-    expect(priceImpactBps(30, 29.97)).toBe(10);
+    expect(executionCostBps(30, 29.97)).toBe(10);
   });
 
   it("is zero when the legs agree", () => {
-    expect(priceImpactBps(30, 30)).toBe(0);
+    expect(executionCostBps(30, 30)).toBe(0);
   });
 
   it("clamps a favourable disagreement to zero", () => {
     // Two independent price lookups disagreeing is not a gain to display.
-    expect(priceImpactBps(30, 30.15)).toBe(0);
+    expect(executionCostBps(30, 30.15)).toBe(0);
   });
 
   it("is null when either leg is missing or unusable", () => {
-    expect(priceImpactBps(null, 30)).toBeNull();
-    expect(priceImpactBps(30, null)).toBeNull();
-    expect(priceImpactBps(Number.NaN, 30)).toBeNull();
-    expect(priceImpactBps(30, Number.POSITIVE_INFINITY)).toBeNull();
+    expect(executionCostBps(null, 30)).toBeNull();
+    expect(executionCostBps(30, null)).toBeNull();
+    expect(executionCostBps(Number.NaN, 30)).toBeNull();
+    expect(executionCostBps(30, Number.POSITIVE_INFINITY)).toBeNull();
   });
 
   it("is null rather than infinite when nothing went in", () => {
-    expect(priceImpactBps(0, 0)).toBeNull();
-    expect(priceImpactBps(-5, 1)).toBeNull();
+    expect(executionCostBps(0, 0)).toBeNull();
+    expect(executionCostBps(-5, 1)).toBeNull();
   });
 
   it("rounds a cost up to the next whole basis point", () => {
@@ -417,11 +524,20 @@ describe("priceImpactBps", () => {
     // infinity, never to nearest, so a figure can only overstate what the trade
     // costs. Half a basis point of cost is 1bp here; `Math.round` made it 0,
     // which reads as a free route. A tenth of one likewise.
-    expect(priceImpactBps(100, 99.995)).toBe(1);
-    expect(priceImpactBps(100, 99.999)).toBe(1);
+    expect(executionCostBps(100, 99.995)).toBe(1);
+    expect(executionCostBps(100, 99.999)).toBe(1);
 
     // $30 valued at $20 is 3,333⅓bps, so the figure shown is 3,334.
-    expect(priceImpactBps(30, 20)).toBe(3_334);
+    expect(executionCostBps(30, 20)).toBe(3_334);
+  });
+
+  it("lands in the measured 58 to 105bps band on real figures", () => {
+    // The band the four live routes measured at a ₦50,000 ticket. The legs here are
+    // constructed to hit its ends rather than transcribed from a response, and the
+    // point is the range: a cost in this band is a market spread, and the formatter's
+    // "under 0.01%" branch is unreachable for anything in it.
+    expect(executionCostBps(30, 29.826)).toBe(58);
+    expect(executionCostBps(30, 29.685)).toBe(105);
   });
 });
 
@@ -489,6 +605,173 @@ describe("the order-size band", () => {
 
     expect(units >= MIN_QUOTE_USDC_UNITS).toBe(true);
     expect(units <= MAX_QUOTE_USDC_UNITS).toBe(true);
+  });
+});
+
+/**
+ * `/api/quote` is unauthenticated and forwards to a third party under our client
+ * id, so both parameters are bounded here rather than trusted and passed on. Every
+ * rejection is a 400 the route hands back verbatim.
+ */
+describe("parseQuoteParams", () => {
+  function parse(query: string) {
+    return parseQuoteParams(new URLSearchParams(query));
+  }
+
+  it("accepts a real ticket", () => {
+    // ₦50,000 at ₦1,650/$.
+    const result = parse("symbol=NVDA&amountIn=30303030");
+
+    expect(result).toEqual({ ok: true, symbol: "NVDA", usdcIn: 30_303_030n });
+  });
+
+  it("rejects a symbol that is not one of the thirteen", () => {
+    for (const query of [
+      "amountIn=30000000",
+      "symbol=&amountIn=30000000",
+      "symbol=ZZZZ&amountIn=30000000",
+      "symbol=nvda&amountIn=30000000",
+      "symbol=constructor&amountIn=30000000",
+    ]) {
+      expect(parse(query).ok, query).toBe(false);
+    }
+  });
+
+  it("rejects a listed stock we hold no address for, by name", () => {
+    // "TSLA is not quotable" and "ZZZZ is not a stock" are different mistakes, and
+    // the first one is worth saying plainly — the token is real, the pool is not.
+    const result = parse("symbol=TSLA&amountIn=30000000");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("TSLA");
+  });
+
+  it("rejects anything that is not an integer number of base units", () => {
+    for (const amountIn of [
+      "",
+      "-30000000",
+      "1.5",
+      "1e7",
+      "+30000000",
+      " 30000000",
+      "0x1c9c380",
+      "abc",
+      "30_000_000",
+      "Infinity",
+    ]) {
+      const result = parse(`symbol=NVDA&amountIn=${encodeURIComponent(amountIn)}`);
+      expect(result.ok, amountIn).toBe(false);
+      if (!result.ok) expect(result.reason, amountIn).toContain("integer");
+    }
+  });
+
+  it("rejects a missing amountIn", () => {
+    expect(parse("symbol=NVDA").ok).toBe(false);
+  });
+
+  it("rejects an over-long digit run before converting it", () => {
+    // The cheap check goes first on purpose: `BigInt()` conversion cost grows faster
+    // than its input, so a multi-kilobyte run of digits must be refused on length
+    // rather than parsed and then found to be outside the band.
+    const result = parse(`symbol=NVDA&amountIn=${"9".repeat(25)}`);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("integer");
+  });
+
+  it("rejects amounts outside the band, including zero", () => {
+    for (const amountIn of [
+      "0",
+      "999999",
+      (MAX_QUOTE_USDC_UNITS + 1n).toString(),
+    ]) {
+      const result = parse(`symbol=NVDA&amountIn=${amountIn}`);
+      expect(result.ok, amountIn).toBe(false);
+      if (!result.ok) expect(result.reason, amountIn).toContain("between");
+    }
+  });
+
+  it("accepts both ends of the band", () => {
+    for (const units of [MIN_QUOTE_USDC_UNITS, MAX_QUOTE_USDC_UNITS]) {
+      const result = parse(`symbol=NVDA&amountIn=${units}`);
+      expect(result.ok, units.toString()).toBe(true);
+    }
+  });
+});
+
+/**
+ * Bourse's fee, at zero and above it.
+ *
+ * Both branches are covered offline because the shape of a request Bourse has never
+ * sent in anger is exactly the thing that should be pinned by a test rather than
+ * discovered on the day someone switches a fee on.
+ */
+describe("bourseFeeParams", () => {
+  it("charges nothing today", () => {
+    expect(BOURSE_FEE_BPS).toBe(0);
+  });
+
+  it("attaches nothing at zero, even with a receiver configured", () => {
+    // Omitted entirely rather than sent as `feeAmount=0`. A fee of zero is not a
+    // fee, and sending it invites the aggregator to reject the request or to quote
+    // one with a fee routed nowhere.
+    expect(bourseFeeParams(0, "0x0000000000000000000000000000000000000001")).toEqual({
+      kind: "none",
+    });
+    expect(bourseFeeParams(0, null)).toEqual({ kind: "none" });
+    expect(bourseFeeParams(-25, "0x0000000000000000000000000000000000000001")).toEqual(
+      { kind: "none" },
+    );
+    expect(bourseFeeParams(Number.NaN, null)).toEqual({ kind: "none" });
+  });
+
+  it("builds KyberSwap's parameters when a fee is set", () => {
+    const receiver = "0x0000000000000000000000000000000000000001";
+    const result = bourseFeeParams(25, receiver);
+
+    expect(result).toEqual({
+      kind: "params",
+      params: {
+        feeAmount: "25",
+        isInBps: "true",
+        // Taken from the USDC going in, so the fee sits inside the amount the user
+        // already agreed to pay instead of quietly reducing the share count they
+        // were shown. That is what lets the panel state one total.
+        chargeFeeBy: "currency_in",
+        feeReceiver: receiver,
+      },
+    });
+  });
+
+  it("refuses a fee with nowhere to send it", () => {
+    const result = bourseFeeParams(25, null);
+
+    expect(result.kind).toBe("misconfigured");
+    if (result.kind === "misconfigured") {
+      expect(result.detail).toContain("BOURSE_FEE_RECEIVER");
+    }
+  });
+
+  it("refuses a fractional basis point", () => {
+    const result = bourseFeeParams(12.5, "0x0000000000000000000000000000000000000001");
+
+    expect(result.kind).toBe("misconfigured");
+    if (result.kind === "misconfigured") {
+      expect(result.detail).toContain("whole number");
+    }
+  });
+});
+
+describe("the live request at BOURSE_FEE_BPS = 0", () => {
+  it("sends no fee parameters", async () => {
+    const { fetchImpl, calls } = stub(() => routed());
+    await requestQuote("NVDA", USDC_IN, { fetchImpl, nowMs: NOW });
+
+    const { url } = onlyCall(calls);
+
+    for (const key of ["feeAmount", "isInBps", "chargeFeeBy", "feeReceiver"]) {
+      expect(url.searchParams.has(key), key).toBe(false);
+    }
   });
 });
 

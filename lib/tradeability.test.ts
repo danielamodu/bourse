@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  PRICE_IMPACT_BUDGET_BPS,
+  EXECUTION_COST_BUDGET_BPS,
+  KYBERSWAP_ROUTER_ADDRESS,
   type Quote,
   type QuoteResult,
 } from "@/lib/quote";
@@ -39,9 +40,11 @@ function quoteResult(overrides: Partial<Quote> = {}): QuoteResult {
       unitsOut: 5_000_000n,
       shares: 0.05,
       usdPerShare: 600,
-      priceImpactBps: 20,
+      executionCostBps: 20,
       gasUsd: 0.004,
-      routerAddress: null,
+      // The pin, because `Quote.routerAddress` is not nullable: a route through
+      // any other router never becomes a `Quote` at all.
+      routerAddress: KYBERSWAP_ROUTER_ADDRESS,
       receivedAtMs: NOW,
       expiresAtMs: NOW + 30_000,
       ...overrides,
@@ -50,30 +53,41 @@ function quoteResult(overrides: Partial<Quote> = {}): QuoteResult {
 }
 
 describe("classifyQuote", () => {
-  it("calls a route inside the impact budget tradeable", () => {
-    expect(classifyQuote(quoteResult({ priceImpactBps: 0 }))).toBe("tradeable");
-    expect(classifyQuote(quoteResult({ priceImpactBps: 20 }))).toBe("tradeable");
+  it("calls a route inside the cost budget tradeable", () => {
+    expect(classifyQuote(quoteResult({ executionCostBps: 0 }))).toBe("tradeable");
+    expect(classifyQuote(quoteResult({ executionCostBps: 20 }))).toBe("tradeable");
   });
 
   it("includes the budget itself", () => {
-    expect(PRICE_IMPACT_BUDGET_BPS).toBe(300);
+    expect(EXECUTION_COST_BUDGET_BPS).toBe(300);
 
     expect(
-      classifyQuote(quoteResult({ priceImpactBps: PRICE_IMPACT_BUDGET_BPS })),
+      classifyQuote(quoteResult({ executionCostBps: EXECUTION_COST_BUDGET_BPS })),
     ).toBe("tradeable");
 
     expect(
       classifyQuote(
-        quoteResult({ priceImpactBps: PRICE_IMPACT_BUDGET_BPS + 1 }),
+        quoteResult({ executionCostBps: EXECUTION_COST_BUDGET_BPS + 1 }),
       ),
     ).toBe("not-tradeable");
   });
 
-  it("treats an unpriced impact as unknown, not as tradeable", () => {
-    // Every buy has to show an impact figure. "Unknown" is not a figure, so a
-    // route we cannot price is a route we do not offer — but it is also not
-    // evidence that the market is missing.
-    expect(classifyQuote(quoteResult({ priceImpactBps: null }))).toBe("unknown");
+  it("passes every measured route comfortably", () => {
+    // 58 to 105bps on the four live tokens against a 300bps budget. The budget is
+    // loose on purpose: what it catches is a token whose only route is priced
+    // absurdly, not a thin one.
+    for (const bps of [58, 62, 90, 105]) {
+      expect(classifyQuote(quoteResult({ executionCostBps: bps })), `${bps}bps`).toBe(
+        "tradeable",
+      );
+    }
+  });
+
+  it("treats an unpriced cost as unknown, not as tradeable", () => {
+    // Every buy has to show what crossing the market costs. "Unknown" is not a
+    // figure, so a route we cannot price is a route we do not offer — but it is
+    // also not evidence that the market is missing.
+    expect(classifyQuote(quoteResult({ executionCostBps: null }))).toBe("unknown");
   });
 
   it("reads no liquidity as the market and a failure as ours", () => {
@@ -87,15 +101,15 @@ describe("classifyQuote", () => {
 });
 
 describe("reportQuote", () => {
-  it("carries the traded price and impact through", () => {
+  it("carries the traded price and the cost through", () => {
     const report = reportQuote(
-      quoteResult({ usdPerShare: 612.5, priceImpactBps: 42 }),
+      quoteResult({ usdPerShare: 612.5, executionCostBps: 42 }),
     );
 
     expect(report).toEqual({
       verdict: "tradeable",
       usdPerShare: 612.5,
-      priceImpactBps: 42,
+      executionCostBps: 42,
     });
   });
 
@@ -110,7 +124,7 @@ describe("reportQuote", () => {
         result.kind === "failed" ? "unknown" : "not-tradeable",
       );
       expect(report.usdPerShare, result.kind).toBeNull();
-      expect(report.priceImpactBps, result.kind).toBeNull();
+      expect(report.executionCostBps, result.kind).toBeNull();
     }
   });
 
@@ -118,12 +132,12 @@ describe("reportQuote", () => {
     // A wide route is still a real price, and the card is entitled to show what
     // the market is charging while refusing to offer a buy at it.
     const report = reportQuote(
-      quoteResult({ usdPerShare: 640, priceImpactBps: 1_200 }),
+      quoteResult({ usdPerShare: 640, executionCostBps: 1_200 }),
     );
 
     expect(report.verdict).toBe("not-tradeable");
     expect(report.usdPerShare).toBe(640);
-    expect(report.priceImpactBps).toBe(1_200);
+    expect(report.executionCostBps).toBe(1_200);
   });
 });
 
@@ -142,6 +156,10 @@ function routeFor(symbol: QuotableSymbol, amountOutUsd: string): Response {
           amountOut: "5000000",
           amountOutUsd,
           gasUsd: "0.004",
+          // Required, not decoration: `interpret` fails closed on a response that
+          // names no router, so a fixture without this would make every probe here
+          // report `unknown`.
+          routerAddress: KYBERSWAP_ROUTER_ADDRESS,
         },
       },
     }),
@@ -203,8 +221,8 @@ describe("probeTradeability", () => {
 
     await probeTradeability({ fetchImpl });
 
-    // Impact is a function of order size, so the verdict is only meaningful at
-    // a stated one. ₦50,000 is about $30.
+    // The cost of crossing can vary with order size, so the verdict is only
+    // meaningful at a stated one. ₦50,000 is about $30.
     expect(PROBE_USDC_UNITS).toBe(30_000_000n);
     expect([...new Set(amounts)]).toEqual(["30000000"]);
   });
@@ -219,7 +237,7 @@ describe("probeTradeability", () => {
     for (const symbol of QUOTABLE_SYMBOLS) {
       expect(reports[symbol].verdict, symbol).toBe("tradeable");
       expect(reports[symbol].usdPerShare, symbol).toBeCloseTo(600, 9);
-      expect(reports[symbol].priceImpactBps, symbol).toBe(20);
+      expect(reports[symbol].executionCostBps, symbol).toBe(20);
     }
 
     // TSLA is issued, has a working feed, and has no published address — so
@@ -246,7 +264,7 @@ describe("probeTradeability", () => {
 
   it("refuses a route that would cost too much to cross", async () => {
     // $30 in, valued at $20 out: 3,334bps, more than ten times the budget. Exactly
-    // 3,333⅓ in real arithmetic, rounded up because impact never rounds toward the
+    // 3,333⅓ in real arithmetic, rounded up because a cost never rounds toward the
     // figure that flatters the trade — see `ceilBps` in lib/price.ts.
     const { fetchImpl } = aggregator((symbol) => routeFor(symbol, "20"));
 
@@ -255,7 +273,7 @@ describe("probeTradeability", () => {
     expect(reports.NVDA.verdict).toBe("not-tradeable");
     // The price is still reported. Refusing to offer a buy is not a reason to
     // hide what the market is charging.
-    expect(reports.NVDA.priceImpactBps).toBe(3_334);
+    expect(reports.NVDA.executionCostBps).toBe(3_334);
     expect(reports.NVDA.usdPerShare).toBeCloseTo(600, 9);
   });
 
@@ -284,7 +302,7 @@ describe("unknownTradeability", () => {
 
     for (const symbol of STOCK_SYMBOLS) {
       expect(reports[symbol].usdPerShare, symbol).toBeNull();
-      expect(reports[symbol].priceImpactBps, symbol).toBeNull();
+      expect(reports[symbol].executionCostBps, symbol).toBeNull();
     }
   });
 

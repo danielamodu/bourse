@@ -91,6 +91,30 @@
   gap: var(--space-4);
 }
 
+/*
+ * The cost breakdown reads as a block: a rule opens it and the total closes it in
+ * heavier type. Separation only — no colour on any of these lines, because a
+ * network fee of a few naira is not a warning and the market spread is not a loss.
+ * Rules and weight are also the two things that survive `prefers-reduced-motion`
+ * and a grayscale screen, which a tint would not.
+ */
+.rowGroup {
+  margin-top: var(--space-2);
+  padding-top: var(--space-4);
+  border-top: var(--border);
+}
+
+.rowTotal {
+  margin-top: var(--space-2);
+  padding-top: var(--space-4);
+  border-top: var(--border);
+}
+
+.rowTotal .value {
+  font-size: var(--text-body-l-size);
+  font-weight: var(--weight-semibold);
+}
+
 .label {
   font-size: var(--text-label-size);
   line-height: var(--text-tight-leading);

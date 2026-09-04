@@ -1,6 +1,6 @@
 import { mapKeys } from "@/lib/map-keys";
 import {
-  PRICE_IMPACT_BUDGET_BPS,
+  EXECUTION_COST_BUDGET_BPS,
   requestQuote,
   type QuoteResult,
 } from "@/lib/quote";
@@ -25,11 +25,11 @@ import {
  * telling a user a stock has no market when in fact our own request timed out.
  */
 export type Tradeability =
-  /** A quote came back, priced inside the impact budget. */
+  /** A quote came back, priced inside the execution-cost budget. */
   | "tradeable"
   /** The aggregator answered: no route, or a price we will not stand behind. */
   | "not-tradeable"
-  /** We could not find out — the request failed, or the impact was unpriced. */
+  /** We could not find out — the request failed, or the cost was unpriced. */
   | "unknown"
   /** No address published, so there is nothing to ask about. */
   | "unpublished";
@@ -51,8 +51,12 @@ export type TradeabilityReport = {
   verdict: Tradeability;
   /** Execution price at the probe size, in USD per share. Null without a quote. */
   usdPerShare: number | null;
-  /** Price impact at the probe size, in bps. Null when the quote did not price it. */
-  priceImpactBps: number | null;
+  /**
+   * What crossing the market costs at the probe size, in bps. Null when the quote
+   * did not price it. Spread and fees rather than size-dependent slippage — see
+   * `Quote.executionCostBps`.
+   */
+  executionCostBps: number | null;
 };
 
 export type TradeabilityReports = Record<StockSymbol, TradeabilityReport>;
@@ -60,7 +64,7 @@ export type TradeabilityReports = Record<StockSymbol, TradeabilityReport>;
 /**
  * The ticket the probe measures at: $30, roughly ₦50,000.
  *
- * Impact is a function of order size, so the question "is this tradeable" is only
+ * Cost can vary with order size, so the question "is this tradeable" is only
  * answerable at some size. A real Bourse ticket is small enough to be noise in
  * even a shallow pool, which is what makes a failure at this size meaningful
  * rather than a symptom of asking too much.
@@ -80,13 +84,13 @@ export function classifyQuote(result: QuoteResult): Tradeability {
   if (result.kind === "failed") return "unknown";
   if (result.kind === "no-liquidity") return "not-tradeable";
 
-  const impact = result.quote.priceImpactBps;
+  const cost = result.quote.executionCostBps;
 
-  // A route we cannot price the impact of is a route we cannot offer: CLAUDE.md
-  // requires impact to be visible on every buy, and unknown is not a figure.
-  if (impact === null) return "unknown";
+  // A route we cannot price is a route we cannot offer: CLAUDE.md requires the
+  // cost of a trade to be visible on every buy, and unknown is not a figure.
+  if (cost === null) return "unknown";
 
-  return impact <= PRICE_IMPACT_BUDGET_BPS ? "tradeable" : "not-tradeable";
+  return cost <= EXECUTION_COST_BUDGET_BPS ? "tradeable" : "not-tradeable";
 }
 
 /**
@@ -99,13 +103,13 @@ export function reportQuote(result: QuoteResult): TradeabilityReport {
   const verdict = classifyQuote(result);
 
   if (result.kind !== "quote") {
-    return { verdict, usdPerShare: null, priceImpactBps: null };
+    return { verdict, usdPerShare: null, executionCostBps: null };
   }
 
   return {
     verdict,
     usdPerShare: result.quote.usdPerShare,
-    priceImpactBps: result.quote.priceImpactBps,
+    executionCostBps: result.quote.executionCostBps,
   };
 }
 
@@ -159,7 +163,7 @@ export async function probeTradeability(
 const UNPUBLISHED: TradeabilityReport = {
   verdict: "unpublished",
   usdPerShare: null,
-  priceImpactBps: null,
+  executionCostBps: null,
 };
 
 /**
@@ -175,6 +179,6 @@ export function unknownTradeability(): TradeabilityReports {
     (symbol): TradeabilityReport =>
       STOCK_TOKENS[symbol].address === null
         ? UNPUBLISHED
-        : { verdict: "unknown", usdPerShare: null, priceImpactBps: null },
+        : { verdict: "unknown", usdPerShare: null, executionCostBps: null },
   );
 }

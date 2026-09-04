@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { quoteBandNgn, withNgnQuote } from "@/lib/quote-ngn";
 import {
+  BOURSE_FEE_BPS,
+  KYBERSWAP_ROUTER_ADDRESS,
   MAX_QUOTE_USDC_UNITS,
   MIN_QUOTE_USDC_UNITS,
   ngnToUsdcUnits,
@@ -24,9 +26,11 @@ function quote(overrides: Partial<Quote> = {}): Quote {
     unitsOut: 5_000_000n,
     shares: 0.05,
     usdPerShare: 600,
-    priceImpactBps: 20,
+    executionCostBps: 20,
     gasUsd: 0.004,
-    routerAddress: null,
+    // The pin. `Quote.routerAddress` is a string, not `string | null`: a route
+    // through any other router never becomes a `Quote`.
+    routerAddress: KYBERSWAP_ROUTER_ADDRESS,
     receivedAtMs: NOW,
     expiresAtMs: NOW + 30_000,
     ...overrides,
@@ -49,8 +53,8 @@ describe("withNgnQuote", () => {
     const original = quote();
     const ngnQuote = withNgnQuote(original, RATE);
 
-    // The shares figure and the impact are true without a rate, so the quote is
-    // carried through rather than rebuilt.
+    // The shares figure and the execution cost are true without a rate, so the
+    // quote is carried through rather than rebuilt.
     expect(ngnQuote.quote).toBe(original);
   });
 
@@ -91,6 +95,86 @@ describe("withNgnQuote", () => {
 
   it("reports gas as null when the route carried no estimate", () => {
     expect(withNgnQuote(quote({ gasUsd: null }), RATE).gasNgn).toBeNull();
+  });
+});
+
+/**
+ * The cost breakdown, which the panel states as four named lines.
+ *
+ * The arithmetic that matters here is what is *inside* what the user pays and what
+ * sits on top of it. The spread and the Bourse fee come out of `ngnIn`; the network
+ * fee is paid separately in ETH. So the total is `ngnIn + gasNgn`, and a total that
+ * added all four would double-count the two lines above it.
+ */
+describe("withNgnQuote: the cost breakdown", () => {
+  it("states the spread as naira as well as basis points", () => {
+    // 20bps of ₦49,500 is ₦99. ₦525 on ₦50,000 is the figure that lands; 1.05% of
+    // it is arithmetic the user would have to do.
+    const ngnQuote = withNgnQuote(quote(), RATE);
+
+    expect(ngnQuote.spreadNgn).toBeCloseTo(99, 9);
+    expect(ngnQuote.quote.executionCostBps).toBe(20);
+  });
+
+  it("takes the spread from the rounded bps figure, so both figures agree", () => {
+    // Derived from the bps the row displays rather than from the raw dollar legs:
+    // someone checking the naira against the percentage finds the number they were
+    // shown. 105bps of ₦50,000 is exactly ₦525.
+    const ngnQuote = withNgnQuote(
+      quote({ usdIn: 50_000 / 1_650, executionCostBps: 105 }),
+      RATE,
+    );
+
+    expect(ngnQuote.ngnIn).toBeCloseTo(50_000, 6);
+    expect(ngnQuote.spreadNgn).toBeCloseTo(525, 6);
+  });
+
+  it("leaves the spread blank when the cost was never priced", () => {
+    // Null, not zero. An unpriced leg is not a free route.
+    expect(withNgnQuote(quote({ executionCostBps: null }), RATE).spreadNgn).toBeNull();
+    expect(withNgnQuote(quote(), null).spreadNgn).toBeNull();
+  });
+
+  it("charges no Bourse fee, and says so at every rate", () => {
+    // Zero rather than null even without a rate: zero naira is zero at every rate,
+    // and the row reads "None" from it. That statement does not depend on a rate
+    // having arrived.
+    expect(BOURSE_FEE_BPS).toBe(0);
+    expect(withNgnQuote(quote(), RATE).feeNgn).toBe(0);
+    expect(withNgnQuote(quote(), null).feeNgn).toBe(0);
+    expect(withNgnQuote(quote({ executionCostBps: null }), RATE).feeNgn).toBe(0);
+  });
+
+  it("totals what the user pays plus the network fee, and nothing else", () => {
+    const ngnQuote = withNgnQuote(quote(), RATE);
+
+    expect(ngnQuote.totalNgn).toBeCloseTo(49_506.6, 6);
+
+    // Explicitly not the sum of the four lines. The spread and the fee are already
+    // inside `ngnIn`, so adding them would charge the user twice for money that
+    // never left twice.
+    const { ngnIn, gasNgn, spreadNgn, feeNgn, totalNgn } = ngnQuote;
+    if (
+      ngnIn === null ||
+      gasNgn === null ||
+      spreadNgn === null ||
+      feeNgn === null ||
+      totalNgn === null
+    ) {
+      throw new Error("expected every naira figure at a usable rate");
+    }
+
+    expect(totalNgn).toBeCloseTo(ngnIn + gasNgn, 9);
+    expect(totalNgn).toBeLessThan(ngnIn + gasNgn + spreadNgn + feeNgn);
+    expect(spreadNgn).toBeLessThan(ngnIn);
+  });
+
+  it("blanks the total rather than understating it", () => {
+    // A total that silently omitted the network fee would be lower than the truth,
+    // and this is the one line someone should be able to trust without reading the
+    // rest.
+    expect(withNgnQuote(quote({ gasUsd: null }), RATE).totalNgn).toBeNull();
+    expect(withNgnQuote(quote(), null).totalNgn).toBeNull();
   });
 });
 

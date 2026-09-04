@@ -3,12 +3,13 @@
 import type { UseQuoteResult } from "@/hooks/useQuote";
 import { cx } from "@/lib/cx";
 import {
-  formatImpactBps,
+  formatBourseFee,
   formatNGN,
   formatNGNAmount,
   formatPremiumBps,
   formatQuoteCountdown,
   formatShares,
+  formatSpread,
   formatUSD,
 } from "@/lib/format";
 import type { StockToken } from "@/lib/tokens";
@@ -20,10 +21,21 @@ import styles from "./TradePanel.module.css";
  *
  * Everything a person needs in order to judge a purchase is on screen at once and
  * none of it is collapsible: what they pay, what they receive, the rate, the
- * premium against the reference, the price impact, the estimated gas, and how
- * long the price is good for. Rows render with a placeholder when there is no
- * quote rather than disappearing, so the shape of the disclosure never changes
- * underneath someone.
+ * premium against the reference, what crossing the market costs, the network fee,
+ * our own fee, the total, and how long the price is good for. Rows render with a
+ * placeholder when there is no quote rather than disappearing, so the shape of the
+ * disclosure never changes underneath someone.
+ *
+ * THE COST LINES ARE NAMED SEPARATELY AND THE TOTAL IS NOT THEIR SUM. The market
+ * spread and the Bourse fee both come *out of* what the user pays; the network fee is
+ * paid on top, in ETH. So the total is the amount plus the network fee, and the two
+ * lines above it say where the money inside the amount went. Adding all four would
+ * double-count — see the diagram in `lib/quote-ngn.ts`.
+ *
+ * The Bourse fee line renders at every value, including zero, where it reads "None".
+ * A fee we do not charge is worth stating: it puts the market spread in context as
+ * someone else's cost, and it means the day a fee exists is a change to a line people
+ * have always seen rather than a charge that appeared.
  *
  * Purely presentational. Every judgement — whether an amount is quotable, whether
  * a quote has expired, what a naira figure converts to — was made in
@@ -88,7 +100,16 @@ export function TradePanel({
       </div>
 
       <dl className={styles.rows}>
-        <Row label="You pay" value={formatNGNAmount(ngn)} filled={ngn !== null} />
+        {/* The quote's own `ngnIn`, not the parsed field, whenever there is a quote:
+            every figure below belongs to one quote, and the total is this line plus
+            the network fee. Reading the field here would let a half-typed amount sit
+            above a total computed from the last priced one. Before any quote there is
+            nothing else to show, so the typed amount stands in. */}
+        <Row
+          label="You pay"
+          value={formatNGNAmount(ngnQuote?.ngnIn ?? ngn)}
+          filled={(ngnQuote?.ngnIn ?? ngn) !== null}
+        />
 
         <Row
           label="You receive (estimate)"
@@ -124,16 +145,40 @@ export function TradePanel({
           }
         />
 
+        {/* The cost group. Naira first in the spread, because ₦525 is a figure someone
+            can weigh against what they were about to spend and 1.05% is arithmetic they
+            have to do first. */}
         <Row
-          label="Price impact"
-          value={formatImpactBps(ngnQuote?.quote.priceImpactBps ?? null)}
-          filled={ngnQuote !== null && ngnQuote.quote.priceImpactBps !== null}
+          label="Market spread"
+          value={formatSpread(
+            ngnQuote?.spreadNgn ?? null,
+            ngnQuote?.quote.executionCostBps ?? null,
+          )}
+          filled={ngnQuote !== null && ngnQuote.quote.executionCostBps !== null}
+          variant="group"
+          caption="The difference between the pool's price and the reference. It comes out of the amount above, and it is the market's, not ours."
         />
 
         <Row
-          label="Estimated gas"
+          label="Network fee"
           value={formatNGNAmount(ngnQuote?.gasNgn ?? null)}
           filled={ngnQuote !== null && ngnQuote.gasNgn !== null}
+          caption="Paid to Base in ETH, on top of the amount above."
+        />
+
+        <Row
+          label="Bourse fee"
+          value={formatBourseFee(ngnQuote?.feeNgn ?? null)}
+          filled={ngnQuote !== null && ngnQuote.feeNgn !== null}
+          caption="We do not charge for this trade."
+        />
+
+        <Row
+          label="Total"
+          value={formatNGNAmount(ngnQuote?.totalNgn ?? null)}
+          filled={ngnQuote !== null && ngnQuote.totalNgn !== null}
+          variant="total"
+          caption="What you pay plus the network fee. The two lines above it are already inside that amount, not added to it."
         />
 
         <Row
@@ -171,11 +216,23 @@ type RowProps = {
   /** False renders the value quietly — it is a placeholder, not a figure. */
   filled: boolean;
   caption?: string | undefined;
+  /**
+   * `group` opens the cost breakdown with a rule above it; `total` closes it in
+   * heavier type. Both are separation only — no colour, because none of these
+   * lines is a loss or a warning.
+   */
+  variant?: "default" | "group" | "total";
 };
 
-function Row({ label, value, filled, caption }: RowProps) {
+function Row({ label, value, filled, caption, variant = "default" }: RowProps) {
   return (
-    <div className={styles.row}>
+    <div
+      className={cx(
+        styles.row,
+        variant === "group" && styles.rowGroup,
+        variant === "total" && styles.rowTotal,
+      )}
+    >
       <dt className={styles.label}>{label}</dt>
       <dd className={styles.valueCell}>
         <span className={cx(styles.value, !filled && styles.muted)}>

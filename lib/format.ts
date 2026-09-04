@@ -74,34 +74,69 @@ export function formatPremiumBps(bps: number | null): string {
   return `${percentFormatter.format(bps / 100)}%`;
 }
 
-const impactFormatter = new Intl.NumberFormat("en-NG", {
+const costFormatter = new Intl.NumberFormat("en-NG", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
 
-/** The smallest impact two decimal places can state: one basis point. */
-const SMALLEST_SHOWN_IMPACT_BPS = 1;
+/** The smallest cost two decimal places can state: one basis point. */
+const SMALLEST_SHOWN_COST_BPS = 1;
 
 /**
- * Price impact as an unsigned percentage, e.g. `0.12%`.
+ * Execution cost as an unsigned percentage, e.g. `0.58%`.
  *
- * Unsigned because impact is a cost, never a gain — `priceImpactBps` clamps a
+ * Unsigned because this is a cost, never a gain — `executionCostBps` clamps a
  * negative reading to zero rather than presenting two disagreeing price lookups
- * as a windfall. A signed `+0.12%` here would read as movement in the user's
+ * as a windfall. A signed `+0.58%` here would read as movement in the user's
  * favour.
  *
- * Anything below one basis point reads as a threshold rather than as `0.00%`.
- * `priceImpactBps` rounds costs up, so a zero reaching here means the route costs
- * less than this can state — not that it is free — and an exact `0.00%` sitting
+ * Anything below one basis point reads as a threshold rather than as `0.00%`,
+ * because `executionCostBps` rounds costs up: a zero arriving here means the route
+ * costs less than this can state, not that it is free, and an exact `0.00%` sitting
  * between real naira figures reads as a number that failed to load. `—` stays
  * reserved for that: no figure at all.
+ *
+ * That branch is the rare one, not the common one. Measured on the four tradeable
+ * tokens the figure runs 58 to 105bps, so in practice every real route prints a
+ * plain percentage; the threshold survives for the unpriced-leg clamp rather than
+ * because small costs are expected.
  */
-export function formatImpactBps(bps: number | null): string {
+export function formatCostBps(bps: number | null): string {
   if (bps === null || !Number.isFinite(bps)) return "—";
-  if (bps < SMALLEST_SHOWN_IMPACT_BPS) {
-    return `under ${impactFormatter.format(SMALLEST_SHOWN_IMPACT_BPS / 100)}%`;
+  if (bps < SMALLEST_SHOWN_COST_BPS) {
+    return `under ${costFormatter.format(SMALLEST_SHOWN_COST_BPS / 100)}%`;
   }
-  return `${impactFormatter.format(bps / 100)}%`;
+  return `${costFormatter.format(bps / 100)}%`;
+}
+
+/**
+ * The market spread as the trade panel states it: `₦525 (1.05%)`.
+ *
+ * Naira first, deliberately. ₦525 on a ₦50,000 ticket is a figure someone can
+ * weigh against what they were about to spend; 1.05% of it is arithmetic they have
+ * to do first. The percentage stays because it is the figure that compares one
+ * stock against another.
+ *
+ * With no rate yet there is no naira figure, so the percentage stands alone rather
+ * than the whole row going blank — the cost is known either way.
+ */
+export function formatSpread(ngn: number | null, bps: number | null): string {
+  const percent = formatCostBps(bps);
+  if (ngn === null || !Number.isFinite(ngn)) return percent;
+  return `${formatNGNAmount(ngn)} (${percent})`;
+}
+
+/**
+ * Bourse's own fee.
+ *
+ * Zero reads as "None", which is a statement rather than a missing figure. `₦0.00`
+ * in a column of naira amounts looks like a rounding artefact or a failed load;
+ * "None" says we are not charging for this, and it is the line a user will have
+ * seen unchanged for months before the day it ever says something else.
+ */
+export function formatBourseFee(ngn: number | null): string {
+  if (ngn === null || !Number.isFinite(ngn)) return NGN_PLACEHOLDER;
+  return ngn === 0 ? "None" : formatNGNAmount(ngn);
 }
 
 /** Shown instead of a share count when there is no quote to take one from. */
@@ -196,5 +231,76 @@ export function formatFeedAge(
   if (age < HOUR_MS) return `${Math.floor(age / MINUTE_MS)}m old`;
   if (age < DAY_MS) return `${Math.floor(age / HOUR_MS)}h old`;
   return `${Math.floor(age / DAY_MS)}d old`;
+}
+
+/**
+ * An address short enough to sit in a sentence: `0x8335…2913`.
+ *
+ * Enough of both ends to recognise a wallet you have seen before, which is all this
+ * is for — it confirms which account is connected. Never use it to identify a token
+ * or a contract: four characters a side are trivial to collide on, and the token
+ * guard in `lib/address.ts` exists precisely because a human cannot verify an address
+ * by eye. Anything that is not address-shaped comes back unchanged rather than
+ * silently truncated into something that looks like one.
+ */
+export function formatAddressShort(address: string | null): string {
+  if (address === null) return "—";
+  if (!/^0x[0-9a-fA-F]{40}$/.test(address)) return address;
+  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+}
+
+/**
+ * The networks worth naming in a sentence, and nothing more.
+ *
+ * Cosmetic by construction: this only fills in "your wallet is on ___", and the one
+ * action offered beside it is switching to Base regardless of the answer. Getting a
+ * name wrong would mislabel a sentence; it cannot misroute anything, which is why a
+ * short hardcoded list is acceptable here and would not be for an address.
+ */
+const CHAIN_NAMES: Readonly<Record<number, string>> = {
+  1: "Ethereum",
+  10: "OP Mainnet",
+  56: "BNB Smart Chain",
+  137: "Polygon",
+  8453: "Base",
+  42_161: "Arbitrum One",
+  84_532: "Base Sepolia",
+};
+
+/**
+ * What to call the network a wallet is on.
+ *
+ * An unknown id is stated as a number rather than guessed at or called "unsupported":
+ * "network 1868" is a fact the user can act on or read out, and it does not claim we
+ * know what we do not. Null — no chain reported at all — reads as "another network",
+ * because the sentence still has to work.
+ */
+export function formatChainName(chainId: number | null): string {
+  if (chainId === null || !Number.isInteger(chainId)) return "another network";
+  return CHAIN_NAMES[chainId] ?? `network ${chainId}`;
+}
+
+/**
+ * What to call a wallet on its own button.
+ *
+ * wagmi's `injected()` connector reports itself as "Injected" when it has no
+ * specific target — a word from the EIP-1193 spec that means nothing to someone
+ * choosing which wallet to open. "Browser Wallet" says where to look for it.
+ *
+ * Only that one generic name is rewritten. A wallet that reports itself as
+ * MetaMask, Trust Wallet or Rabby — which is what EIP-6963 discovery gives us,
+ * one connector per installed wallet — is named on the button exactly as it named
+ * itself, because that is the label the user will see again inside their wallet.
+ *
+ * The name comes from the connector and only from the connector. Nothing here
+ * reads `window.ethereum`: a wallet that identifies itself through wagmi is a
+ * wallet wagmi can connect to, and sniffing the window would let us label a
+ * button we cannot honour.
+ */
+export function formatConnectorName(name: string): string {
+  const trimmed = name.trim();
+  // Empty is grouped with "Injected" rather than rendered: a nameless button is
+  // the same problem as an unhelpfully named one, and both are this connector.
+  return trimmed === "" || trimmed === "Injected" ? "Browser Wallet" : trimmed;
 }
 

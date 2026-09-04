@@ -1,12 +1,6 @@
 import { NextResponse } from "next/server";
 
-import {
-  MAX_QUOTE_USDC_UNITS,
-  MIN_QUOTE_USDC_UNITS,
-  requestQuote,
-  toQuoteWire,
-} from "@/lib/quote";
-import { QUOTABLE_SYMBOLS, type QuotableSymbol } from "@/lib/tokens";
+import { parseQuoteParams, requestQuote, toQuoteWire } from "@/lib/quote";
 
 /**
  * Quote proxy: `GET /api/quote?symbol=NVDA&amountIn=30000000`.
@@ -22,9 +16,13 @@ import { QUOTABLE_SYMBOLS, type QuotableSymbol } from "@/lib/tokens";
  * Unauthenticated, deliberately and in line with `/api/ngn-rate`: `/markets` is
  * browseable with no wallet connected, so there is no session to authenticate
  * against at the point this is called. What stands in for auth is that the input
- * surface is closed — `symbol` must be one of four registry keys and `amountIn`
- * must be an integer inside a sane band, so the route cannot be pointed at an
- * arbitrary token, chain or amount. It is a read of public market data either way.
+ * surface is closed — `parseQuoteParams` accepts one of four registry keys and an
+ * integer inside a bounded band, so the route cannot be pointed at an arbitrary
+ * token, chain or amount, and cannot be made to forward an unbounded string to a
+ * third party under our client id. It is a read of public market data either way.
+ *
+ * The validation itself lives in `lib/quote.ts` so the offline suite covers it.
+ * This file is the HTTP shell: parse, forward, choose a status.
  */
 
 export const dynamic = "force-dynamic";
@@ -32,25 +30,16 @@ export const dynamic = "force-dynamic";
 const NO_STORE = { "cache-control": "no-store" } as const;
 
 export async function GET(request: Request) {
-  const params = new URL(request.url).searchParams;
+  const params = parseQuoteParams(new URL(request.url).searchParams);
 
-  const symbol = params.get("symbol");
-  if (symbol === null || !isQuotable(symbol)) {
-    return bad(`symbol must be one of ${QUOTABLE_SYMBOLS.join(", ")}`);
-  }
-
-  const amountIn = params.get("amountIn");
-  if (amountIn === null || !/^\d+$/.test(amountIn)) {
-    return bad("amountIn must be an integer number of USDC base units");
-  }
-
-  const usdcIn = BigInt(amountIn);
-  if (usdcIn < MIN_QUOTE_USDC_UNITS || usdcIn > MAX_QUOTE_USDC_UNITS) {
-    return bad(
-      `amountIn must be between ${MIN_QUOTE_USDC_UNITS} and ${MAX_QUOTE_USDC_UNITS} USDC base units`,
+  if (!params.ok) {
+    return NextResponse.json(
+      { kind: "failed", error: params.reason },
+      { status: 400, headers: NO_STORE },
     );
   }
 
+  const { symbol, usdcIn } = params;
   const result = await requestQuote(symbol, usdcIn);
 
   if (result.kind === "failed") {
@@ -64,15 +53,4 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.json(toQuoteWire(result), { headers: NO_STORE });
-}
-
-function isQuotable(value: string): value is QuotableSymbol {
-  return (QUOTABLE_SYMBOLS as readonly string[]).includes(value);
-}
-
-function bad(reason: string) {
-  return NextResponse.json(
-    { kind: "failed", error: reason },
-    { status: 400, headers: NO_STORE },
-  );
 }

@@ -1,5 +1,6 @@
 import { computePremiumBps, scaleBigInt, toNgn } from "@/lib/price";
 import {
+  BOURSE_FEE_BPS,
   MAX_QUOTE_USDC_UNITS,
   MIN_QUOTE_USDC_UNITS,
   type Quote,
@@ -17,8 +18,20 @@ import { USDC_DECIMALS } from "@/lib/tokens";
  *
  * Every field is nullable rather than the whole object being nullable. A missing
  * rate should blank one row, not remove the quote — the shares figure and the
- * price impact are still true without it, and the formatters already render null
+ * execution cost are still true without it, and the formatters already render null
  * as a placeholder.
+ *
+ * HOW THE FIGURES COMPOSE, because the panel states a total and a total that
+ * double-counts would be a lie:
+ *
+ *   ngnIn      what the user hands over
+ *     ├ spreadNgn   part of ngnIn that the market takes
+ *     └ feeNgn      part of ngnIn that Bourse takes (zero today)
+ *   gasNgn     paid separately, in ETH, on top
+ *   totalNgn   ngnIn + gasNgn
+ *
+ * So the spread and the Bourse fee are named because a user should know where
+ * their naira went, not because they are added to it.
  */
 export type NgnQuote = {
   quote: Quote;
@@ -39,7 +52,46 @@ export type NgnQuote = {
    * precise thing it looks like.
    */
   premiumBps: number | null;
+  /**
+   * The market spread as naira, taken as `executionCostBps` of `ngnIn`.
+   *
+   * Derived from the rounded basis-point figure rather than from the raw dollar
+   * legs so that the two figures on that row agree: someone checking ₦525 against
+   * 1.05% of ₦50,000 finds the number they were shown. The bps figure rounds up,
+   * so this inherits that — at most a basis point over, never under.
+   */
+  spreadNgn: number | null;
+  /**
+   * Bourse's cut, in naira. Zero while {@link BOURSE_FEE_BPS} is zero.
+   *
+   * Zero rather than null when there is no rate yet, because zero naira is zero at
+   * every rate. The row reads "None" from it, and that statement does not depend on
+   * a rate having arrived.
+   */
+  feeNgn: number | null;
+  /**
+   * Everything that leaves the user: `ngnIn` plus the network fee.
+   *
+   * Null when either part is unknown. A total that silently omits the network fee
+   * would understate the cost, and the whole reason this line exists is to be the
+   * one figure someone can trust without reading the rest.
+   */
+  totalNgn: number | null;
 };
+
+/**
+ * A basis-point share of a naira amount: 105bps of ₦50,000 is ₦525.
+ *
+ * Null in, null out, so a missing rate propagates rather than becoming a zero that
+ * reads as "no cost".
+ */
+function bpsOfNgn(ngn: number | null, bps: number | null): number | null {
+  if (ngn === null || bps === null) return null;
+  if (!Number.isFinite(ngn) || !Number.isFinite(bps)) return null;
+
+  const share = (ngn * bps) / 10_000;
+  return Number.isFinite(share) ? share : null;
+}
 
 /**
  * Adds the naira figures and the premium to a quote. Pure.
@@ -53,12 +105,18 @@ export function withNgnQuote(
   usdToNgnRate: number | null,
   referenceUsd: number | null = null,
 ): NgnQuote {
+  const ngnIn = toNgn(quote.usdIn, usdToNgnRate);
+  const gasNgn = toNgn(quote.gasUsd, usdToNgnRate);
+
   return {
     quote,
-    ngnIn: toNgn(quote.usdIn, usdToNgnRate),
+    ngnIn,
     ngnPerShare: toNgn(quote.usdPerShare, usdToNgnRate),
-    gasNgn: toNgn(quote.gasUsd, usdToNgnRate),
+    gasNgn,
     premiumBps: computePremiumBps(quote.usdPerShare, referenceUsd),
+    spreadNgn: bpsOfNgn(ngnIn, quote.executionCostBps),
+    feeNgn: BOURSE_FEE_BPS <= 0 ? 0 : bpsOfNgn(ngnIn, BOURSE_FEE_BPS),
+    totalNgn: ngnIn === null || gasNgn === null ? null : ngnIn + gasNgn,
   };
 }
 

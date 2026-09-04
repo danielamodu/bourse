@@ -2,6 +2,7 @@ import { decodeAbiParameters, hexToString } from "viem";
 import { describe, expect, it } from "vitest";
 
 import { isValidTokenAddress } from "@/lib/address";
+import { KYBERSWAP_ROUTER_ADDRESS } from "@/lib/quote";
 import {
   BASE_RPC_URLS,
   MULTICALL3_ADDRESS,
@@ -29,9 +30,9 @@ import {
  *
  * Two kinds of check, because Base has two kinds of built-in contract:
  *
- * - **Feeds, Multicall3 and USDC** are ordinary contracts — Multicall3 is a
- *   genesis preinstall, the Chainlink feeds and USDC are deployed normally. All
- *   have EVM bytecode, so `eth_getCode` returning `0x` means the address is wrong.
+ * - **Feeds, Multicall3, USDC and the KyberSwap router** are ordinary contracts —
+ *   Multicall3 is a genesis preinstall, the rest are deployed normally. All have
+ *   EVM bytecode, so `eth_getCode` returning `0x` means the address is wrong.
  *   That is the assertion.
  * - **The four B20 tokens** sit in the `0xb2…` precompile range and run as native
  *   client code outside the EVM. They return **exactly one byte** here, which
@@ -74,6 +75,14 @@ const DEPLOYED: ReadonlyArray<readonly [string, string]> = [
   // USDC is an ordinary ERC-20, not a precompile, so it belongs in this group and
   // not with the four B20 tokens. Every quote is denominated in it.
   ["USDC", USDC_ADDRESS],
+  // The pinned router. In Part B this is the spender of a user's USDC allowance,
+  // which is the highest-consequence address in the repo: an approval to the wrong
+  // one drains every USDC the wallet ever holds. Bytecode is the weakest of the
+  // three things that establish it — the pin itself is what stops the response
+  // choosing an address, and `verify:quote` is what confirms KyberSwap still routes
+  // through this one — but an address with nothing deployed at it would mean the
+  // pin was transcribed wrong, and that has to fail somewhere.
+  ["KyberSwap router", KYBERSWAP_ROUTER_ADDRESS],
 ];
 
 const EXPECTED_SYMBOLS = [
@@ -145,7 +154,7 @@ async function fromAnyEndpoint<T>(
  * One test per address, so a failure names the contract rather than an index.
  * Empty bytecode here means the address is wrong: none of these are precompiles.
  */
-describe("contracts with bytecode: 13 feeds, Multicall3 and USDC", () => {
+describe("contracts with bytecode: 13 feeds, Multicall3, USDC and the router", () => {
   for (const [label, address] of DEPLOYED) {
     it(`${label} — ${address}`, async () => {
       const { value: code, url } = await fromAnyEndpoint(

@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  EXECUTION_COST_BUDGET_BPS,
+  KYBERSWAP_ROUTER_ADDRESS,
   KYBERSWAP_ROUTES_URL,
   MAX_QUOTE_USDC_UNITS,
-  PRICE_IMPACT_BUDGET_BPS,
   QUOTE_TTL_MS,
+  ROUTER_MISMATCH_DETAIL,
   requestQuote,
   type QuoteResult,
 } from "@/lib/quote";
@@ -37,6 +39,11 @@ import { classifyQuote, PROBE_USDC_UNITS } from "@/lib/tradeability";
  *   transport, or a reply we could not read.
  * - A quote that does come back is internally coherent: the amount we sent is
  *   echoed, the share count is positive, expiry is exactly `QUOTE_TTL_MS` on.
+ * - The router the response names is still the pinned one. This is the assertion
+ *   that is *supposed* to break: `KYBERSWAP_ROUTER_ADDRESS` is the spender of a
+ *   USDC allowance in Part B, so if KyberSwap redeploys, every quote fails closed
+ *   in production and this file is where the new address gets read and checked
+ *   before the pin moves. A red here is work to do, not a flaky test.
  *
  * It does not assert which tokens are tradeable, and must not start to. That is
  * derived at runtime for the same reason a hardcoded list would be wrong here.
@@ -58,8 +65,8 @@ const MAPPED_FIELDS: ReadonlyArray<readonly [string, string]> = [
   ["amountIn", "the echo guard cannot confirm the amount we sent"],
   ["tokenOut", "the echo guard cannot confirm which token was priced"],
   ["amountOut", "there is no share count, so there is no quote at all"],
-  ["amountInUsd", "price impact goes blank, and no buy affordance renders"],
-  ["amountOutUsd", "price impact goes blank, and no buy affordance renders"],
+  ["amountInUsd", "the market spread goes blank, and no buy affordance renders"],
+  ["amountOutUsd", "the market spread goes blank, and no buy affordance renders"],
   ["gasUsd", "estimated gas goes blank, which CLAUDE.md requires visible"],
 ];
 
@@ -78,16 +85,24 @@ function summarise(result: QuoteResult): string {
   if (result.kind !== "quote") return `${result.kind} — ${result.detail}`;
 
   const { quote } = result;
-  const impact =
-    quote.priceImpactBps === null ? "unpriced" : `${quote.priceImpactBps}bps`;
+  const cost =
+    quote.executionCostBps === null
+      ? "unpriced"
+      : `${quote.executionCostBps}bps`;
   const gas = quote.gasUsd === null ? "no estimate" : `$${quote.gasUsd}`;
 
   return [
     `${quote.shares} shares`,
     `$${quote.usdPerShare.toFixed(2)}/share`,
-    `impact ${impact}`,
+    // "spread", not "impact": this is the gap between the two USD legs, which is
+    // pool fee and quote-vs-reference disagreement, and is near enough
+    // size-independent. Naming it impact overstated what it measures.
+    `spread ${cost}`,
     `gas ${gas}`,
-    `router ${quote.routerAddress ?? "absent"}`,
+    // Printed on every line, even though `interpret` already refused anything that
+    // did not match the pin — the address is the one figure here worth reading with
+    // your own eyes, because it is what a user's USDC allowance will name.
+    `router ${quote.routerAddress}`,
   ].join(", ");
 }
 
@@ -124,6 +139,15 @@ describe("a $30 quote for each published token", () => {
       expect(quote.shares, "shares").toBeGreaterThan(0);
       expect(quote.usdPerShare, "usdPerShare").toBeGreaterThan(0);
       expect(quote.expiresAtMs - quote.receivedAtMs, "ttl").toBe(QUOTE_TTL_MS);
+
+      // Belt and braces. `interpret` already refused any route naming another
+      // router, so a `quote` here cannot carry a mismatch — this restates it as an
+      // assertion so that a future change loosening the guard fails a live test as
+      // well as an offline one. Lowercased on both sides: checksum casing is
+      // cosmetic and KyberSwap returns this address lowercase.
+      expect(quote.routerAddress.toLowerCase(), "router echo").toBe(
+        KYBERSWAP_ROUTER_ADDRESS.toLowerCase(),
+      );
     });
   }
 });
@@ -191,10 +215,26 @@ describe("the routeSummary fields the mapping depends on", () => {
 
     // Read off the summary with the envelope as fallback, so this passes wherever
     // KyberSwap chooses to put it — and fails if it stops sending it at all.
+    const router = summary.routerAddress ?? body.data?.routerAddress;
+
     expect(
-      summary.routerAddress ?? body.data?.routerAddress,
+      router,
       "no routerAddress anywhere in the response; Part B has nothing to submit to",
     ).toBeTypeOf("string");
+
+    console.info(`  routerAddress = ${JSON.stringify(router)}`);
+    console.info(`  pinned in lib/quote.ts = ${KYBERSWAP_ROUTER_ADDRESS}`);
+
+    // The one assertion here that is meant to break one day. If KyberSwap redeploys
+    // its router, the app stops quoting entirely — `interpret` fails closed rather
+    // than granting an allowance to an address the response chose — and this line,
+    // with the two values printed above it, is the whole diagnosis. Moving the pin
+    // is a deliberate act: read the new address here, confirm it has bytecode in
+    // `verify:chain`, then change the constant. Never copy it out of a response.
+    expect(
+      String(router).toLowerCase(),
+      `the response names a router other than the pin. Every quote is failing closed with "${ROUTER_MISMATCH_DETAIL}" until the pin is verified and moved.`,
+    ).toBe(KYBERSWAP_ROUTER_ADDRESS.toLowerCase());
   });
 });
 
@@ -221,10 +261,13 @@ describe("what a refusal actually says", () => {
 
     if (result.kind === "quote") {
       // A route at this size is a real answer and not a failure of this check. The
-      // impact is the part worth reading: against a 3% budget it should be vast,
-      // and `classifyQuote` above should already say `not-tradeable`.
+      // cost is the part worth reading: against a 3% budget it should be vast, and
+      // `classifyQuote` above should already say `not-tradeable`. This is also the
+      // one place the figure behaves like impact rather than spread — $1,000,000
+      // against a $2.5M pool is genuinely size-dependent, which a ₦50,000 ticket
+      // never is.
       console.info(
-        `  priced at ${String(result.quote.priceImpactBps)}bps against a ${PRICE_IMPACT_BUDGET_BPS}bps budget`,
+        `  priced at ${String(result.quote.executionCostBps)}bps against a ${EXECUTION_COST_BUDGET_BPS}bps budget`,
       );
       return;
     }
