@@ -9,7 +9,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify:chain": "vitest run --config vitest.verify.config.ts"
+    "verify": "vitest run --config vitest.verify.config.ts",
+    "verify:chain": "vitest run --config vitest.verify.config.ts verify/chain.verify.ts",
+    "verify:quote": "vitest run --config vitest.verify.config.ts verify/quote.verify.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.0",

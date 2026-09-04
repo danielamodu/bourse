@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { assertValidTokenAddress, isValidTokenAddress } from "@/lib/address";
-import { CHAINLINK_FEEDS, TRADEABLE_TOKENS } from "@/lib/tokens";
+import { CHAINLINK_FEEDS, TOKEN_ADDRESSES } from "@/lib/tokens";
 
 const zeros = (count: number) => "0".repeat(count);
 
@@ -95,12 +95,12 @@ describe("assertValidTokenAddress", () => {
  * The transcription check.
  *
  * These four addresses were typed by hand, so this asserts the documented shape
- * on the actual registry values rather than on a copy. `lib/tokens.onchain.test.ts`
+ * on the actual registry values rather than on a copy. `verify/chain.verify.ts`
  * is the other half: it reads `symbol()` back off each contract.
  */
-describe("TRADEABLE_TOKENS shape", () => {
+describe("TOKEN_ADDRESSES shape", () => {
   it("holds 0xb2 + 20 zeros + 18 hex characters on all four", () => {
-    const entries = Object.entries(TRADEABLE_TOKENS);
+    const entries = Object.entries(TOKEN_ADDRESSES);
     expect(entries).toHaveLength(4);
 
     for (const [symbol, address] of entries) {

@@ -1,0 +1,190 @@
+/*
+ * The trade panel. Quiet surface, no shadow, generous rows — this is the screen
+ * someone reads before spending money, so nothing on it competes for attention.
+ */
+
+.panel {
+  margin-top: var(--space-12);
+  padding: var(--space-6);
+  background: var(--color-surface);
+  border: var(--border);
+  border-radius: var(--radius-panel);
+}
+
+.title {
+  font-size: var(--text-h3-size);
+  line-height: var(--text-h3-leading);
+  font-weight: var(--weight-semibold);
+}
+
+.field {
+  margin-top: var(--space-4);
+}
+
+.fieldLabel {
+  display: block;
+  font-size: var(--text-label-size);
+  line-height: var(--text-tight-leading);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.inputWrap {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-canvas);
+  border: var(--border);
+  border-radius: var(--radius);
+  transition: border-color var(--duration-tab) var(--ease-state);
+}
+
+.inputWrap:focus-within {
+  border-color: var(--color-action);
+}
+
+.currency {
+  font-size: var(--text-h3-size);
+  line-height: var(--text-tight-leading);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-muted);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--text-h3-size);
+  line-height: var(--text-tight-leading);
+  font-weight: var(--weight-medium);
+}
+
+.input:focus {
+  outline: none;
+}
+
+.input::placeholder {
+  color: var(--color-border);
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: var(--border);
+}
+
+.row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.label {
+  font-size: var(--text-label-size);
+  line-height: var(--text-tight-leading);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.valueCell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+  text-align: right;
+}
+
+.value {
+  font-family: var(--font-mono);
+  font-size: var(--text-data-size);
+  line-height: var(--text-tight-leading);
+  font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.muted {
+  color: var(--color-text-muted);
+}
+
+.caption {
+  font-size: var(--text-label-size);
+  line-height: var(--text-body-leading);
+  color: var(--color-text-muted);
+  max-width: 42ch;
+}
+
+.status {
+  margin-top: var(--space-4);
+  font-size: var(--text-data-size);
+  line-height: var(--text-body-leading);
+  color: var(--color-text-muted);
+  max-width: 62ch;
+}
+
+.statusNotice {
+  color: var(--color-notice);
+}
+
+.retry {
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-surface);
+  color: var(--color-action);
+  border: 1px solid var(--color-action);
+  border-radius: var(--radius);
+  font-family: inherit;
+  font-size: var(--text-data-size);
+  line-height: var(--text-tight-leading);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-tab) var(--ease-state),
+    color var(--duration-tab) var(--ease-state);
+}
+
+.retry:hover {
+  background: var(--color-action);
+  color: var(--color-surface);
+}
+
+.disclaimer {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: var(--border);
+  font-size: var(--text-label-size);
+  line-height: var(--text-body-leading);
+  color: var(--color-text-muted);
+  max-width: 62ch;
+}
+
+@media (max-width: 640px) {
+  .panel {
+    padding: var(--space-4);
+  }
+
+  .row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+  }
+
+  .valueCell {
+    align-items: flex-start;
+    text-align: left;
+  }
+}

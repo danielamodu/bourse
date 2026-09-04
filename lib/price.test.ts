@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ceilBps,
   combineStockPrice,
   computePremiumBps,
   FEED_STALE_AFTER_MS,
@@ -51,11 +52,71 @@ describe("toNgn", () => {
   });
 });
 
+describe("ceilBps", () => {
+  it("rounds a fraction of a basis point up to one", () => {
+    // The whole point of the contract: a cost smaller than the smallest figure we
+    // can display is still a cost, and rounding it to 0 would claim a free route.
+    expect(ceilBps(0.5)).toBe(1);
+    expect(ceilBps(0.1)).toBe(1);
+    // A millionth of a basis point, to show the epsilon is nowhere near large
+    // enough to swallow one.
+    expect(ceilBps(0.000_001)).toBe(1);
+  });
+
+  it("leaves a figure that is already whole alone", () => {
+    expect(ceilBps(20)).toBe(20);
+    expect(ceilBps(1_000)).toBe(1_000);
+    expect(ceilBps(-100)).toBe(-100);
+  });
+
+  it("lifts a figure that floating point left just short of whole", () => {
+    // `(30 - 29.94) / 30 * 10_000` is 19.999999999999574, not 20. Ceiling is what
+    // recovers the figure a person would write down.
+    expect(ceilBps(19.999999999999574)).toBe(20);
+    expect(ceilBps(999.9999999999999)).toBe(1_000);
+  });
+
+  it("does not charge a basis point for a figure left just over whole", () => {
+    // The other side of the same noise, and the reason for `BPS_EPSILON`:
+    // `(30 - 29.97) / 30 * 10_000` is 10.000000000000379, and a route costing
+    // exactly 10bps must not be presented as costing 11.
+    expect(ceilBps(10.000000000000379)).toBe(10);
+    expect(ceilBps(20.00000000000076)).toBe(20);
+    // And the same on the other side of zero: a 100bp discount stays 100, rather
+    // than losing a basis point to the same noise.
+    expect(ceilBps(-99.99999999999999)).toBe(-100);
+  });
+
+  it("rounds a discount toward zero, so a saving is never flattered", () => {
+    // -322.58bps reads as -322. Toward positive infinity in the signed sense,
+    // which for a discount means the smaller saving of the two.
+    expect(ceilBps(-322.58064516129031)).toBe(-322);
+    expect(ceilBps(344.82758620689656)).toBe(345);
+    expect(ceilBps(3_333.3333333333335)).toBe(3_334);
+  });
+
+  it("answers a positive zero, never -0", () => {
+    // `Math.ceil` gives -0 for anything in (-1, 0], and `Object.is(-0, 0)` is
+    // false — so a parity reading would fail a `toBe(0)` without the collapse,
+    // and could render as "-0.00%".
+    expect(Object.is(ceilBps(0), 0)).toBe(true);
+    expect(Object.is(ceilBps(-1e-12), 0)).toBe(true);
+    expect(Object.is(ceilBps(-0.5), 0)).toBe(true);
+  });
+});
+
 describe("computePremiumBps", () => {
   it("reports a premium and a discount", () => {
     expect(computePremiumBps(202, 200)).toBe(100);
     expect(computePremiumBps(198, 200)).toBe(-100);
     expect(computePremiumBps(200, 200)).toBe(0);
+  });
+
+  it("rounds both directions the same way", () => {
+    // $600 traded against a $620 reference and against $580. Both figures are read
+    // by someone deciding whether to pay this price, so both round up.
+    expect(computePremiumBps(600, 620)).toBe(-322);
+    expect(computePremiumBps(600, 580)).toBe(345);
   });
 
   it("is null without both sides", () => {

@@ -95,26 +95,6 @@
   color: var(--color-text-muted);
 }
 
-.panel {
-  margin-top: var(--space-12);
-  padding: var(--space-6);
-  background: var(--color-surface);
-  border: var(--border);
-  border-radius: var(--radius-panel);
-}
-
-.panelTitle {
-  font-size: var(--text-h3-size);
-  line-height: var(--text-h3-leading);
-  font-weight: var(--weight-semibold);
-}
-
-.panelBody {
-  margin-top: var(--space-3);
-  color: var(--color-text-muted);
-  max-width: 62ch;
-}
-
 @media (max-width: 640px) {
   .page {
     padding: var(--space-8) var(--gutter-mobile) var(--space-16);

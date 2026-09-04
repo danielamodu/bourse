@@ -9,12 +9,15 @@ import {
 } from "@/lib/format";
 import type { FeedUnusableReason, StockPrice } from "@/lib/price";
 import type { StockToken } from "@/lib/tokens";
+import type { Tradeability } from "@/lib/tradeability";
 
 import styles from "./MarketCard.module.css";
 
 type MarketCardProps = {
   token: StockToken;
   price: StockPrice;
+  /** Whether an aggregator will quote this token, measured rather than authored. */
+  tradeability: Tradeability;
   /** Position in the grid, for the staggered entrance. */
   index: number;
   /** Clock the reference age is measured against. Null before it is known. */
@@ -24,19 +27,30 @@ type MarketCardProps = {
 /**
  * One market.
  *
- * Two treatments, and which one a token gets is derived from `hasLiquidity`
- * rather than passed in — a card cannot be told to show a buy affordance for a
- * token nothing will quote.
+ * Two treatments, and which one a token gets follows the `tradeability` verdict —
+ * which is a quote that came back inside the impact budget, not a flag anybody
+ * wrote down. The registry used to carry `hasLiquidity`; depth on Base moves with
+ * weekly Aerodrome gauge votes, so that flag was a measurement with an expiry
+ * date stored as if it were a property.
  *
  * Tradeable: the full card, and the whole card is the link.
- * Listed only: reference price and its age, quieter, and no buy affordance at
+ * Everything else: reference price and its age, quieter, and no buy affordance at
  * all. Not a disabled button — that invites a click and then explains nothing.
- * The reason those tokens cannot be bought is stated once above the group.
+ * The reason those tokens cannot be bought is stated once above the group, except
+ * for `unknown`, which is our own failed request and says so on the card rather
+ * than borrowing a sentence about the market.
  *
  * Presentational throughout: every judgement about whether a price is usable or
- * current was already made in lib/price.
+ * current was already made in lib/price, and every judgement about whether a
+ * token can be bought in lib/tradeability.
  */
-export function MarketCard({ token, price, index, nowMs }: MarketCardProps) {
+export function MarketCard({
+  token,
+  price,
+  tradeability,
+  index,
+  nowMs,
+}: MarketCardProps) {
   const stagger = { "--stagger": index } as CSSProperties;
   const age = formatFeedAge(price.updatedAt, nowMs);
 
@@ -69,11 +83,16 @@ export function MarketCard({ token, price, index, nowMs }: MarketCardProps) {
       </p>
     ) : null;
 
-  if (!token.hasLiquidity) {
+  if (tradeability !== "tradeable") {
     return (
       <article className={cx(styles.card, styles.quiet)} style={stagger}>
         {heading}
         {reference}
+        {tradeability === "unknown" ? (
+          <p className={styles.note}>
+            We could not get a price for this one just now.
+          </p>
+        ) : null}
       </article>
     );
   }

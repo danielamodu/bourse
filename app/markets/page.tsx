@@ -1,8 +1,10 @@
+import { unstable_cache } from "next/cache";
 import { Suspense } from "react";
 
 import { MarketCardSkeleton } from "@/components/MarketCard";
 import { readStockPrices } from "@/lib/read-prices";
 import { STOCK_SYMBOLS } from "@/lib/tokens";
+import { probeTradeability } from "@/lib/tradeability";
 
 import { MarketsGrid } from "./MarketsGrid";
 import styles from "./markets.module.css";
@@ -50,12 +52,59 @@ export default function MarketsPage() {
  * The feed read, split out so the header streams ahead of it. Base's public RPCs
  * are not always quick, and a header plus skeletons beats a blank page for
  * someone on mobile data.
+ *
+ * Cached for 30 seconds in the data cache, which is a different cache from the
+ * one `force-dynamic` turns off: the route still renders per request, but
+ * concurrent requests share one Multicall3 read instead of each firing their own
+ * at an endpoint that rate-limits after about a dozen calls. Thirty seconds is
+ * nothing measured against feeds that were 29 minutes to 15 hours old when last
+ * checked.
+ *
+ * `readAtMs` is produced inside the cached function, not passed into it — as an
+ * argument it would land in the cache key and nothing would ever hit. It comes
+ * back with the prices so it describes when *they* were read, which is what the
+ * age caption needs. Per-token age stays correct either way, since it derives
+ * from each feed's own `updatedAt` rather than from this timestamp.
  */
-async function Markets() {
-  const readAtMs = Date.now();
-  const prices = await readStockPrices(readAtMs);
+const readCachedPrices = unstable_cache(
+  async () => {
+    const readAtMs = Date.now();
+    return { prices: await readStockPrices(readAtMs), readAtMs };
+  },
+  ["markets-reference-prices"],
+  { revalidate: 30 },
+);
 
-  return <MarketsGrid prices={prices} readAtMs={readAtMs} />;
+/**
+ * The tradeability probe, cached on its own key.
+ *
+ * Four quote requests to KyberSwap, one per published token. Cached for the same
+ * 30 seconds and for the same reason as the price read: concurrent page views
+ * should share one round of probing rather than each firing four requests at an
+ * aggregator that has no obligation to serve us.
+ *
+ * A separate cache entry from the prices because the two answer to different
+ * upstreams — a KyberSwap wobble should not throw away a good feed read, and vice
+ * versa. Nothing here can throw: `probeTradeability` resolves every branch to a
+ * verdict, so a bad round comes back as `unknown` and the grid says so.
+ */
+const probeCachedTradeability = unstable_cache(
+  async () => probeTradeability(),
+  ["markets-tradeability-probe"],
+  { revalidate: 30 },
+);
+
+async function Markets() {
+  // Issued together: the feed read and the quote probe go to different upstreams
+  // and neither needs the other's answer.
+  const [{ prices, readAtMs }, reports] = await Promise.all([
+    readCachedPrices(),
+    probeCachedTradeability(),
+  ]);
+
+  return (
+    <MarketsGrid prices={prices} reports={reports} readAtMs={readAtMs} />
+  );
 }
 
 /** Skeleton cards, not a spinner: the grid does not jump when prices land. */

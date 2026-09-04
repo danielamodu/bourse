@@ -34,8 +34,8 @@ export const BASE_CHAIN_ID = 8453;
  * a check on a value that was copied by hand.
  *
  * This one is a genesis preinstall, so it has real EVM bytecode and
- * `eth_getCode` returns it. The B20 token addresses do not work that way; see
- * `ethGetCode` below.
+ * `eth_getCode` returns a full body. The B20 token addresses return one byte
+ * instead; see `ethGetCode` below.
  */
 export const MULTICALL3_ADDRESS =
   "0xcA11bde05977b3631167028862bE2a173976CA11" as const;
@@ -170,18 +170,25 @@ export function ethCall(url: string, to: string, data: Hex): Promise<Hex> {
 /**
  * The deployed bytecode at an address, or `0x` when there is none.
  *
- * `0x` does not on its own mean an address is wrong. Base carries two kinds of
- * built-in contract, and they answer this call differently:
+ * `0x` does not on its own mean an address is wrong, and non-empty does not mean
+ * it is right. Base carries two kinds of built-in contract:
  *
  * - **Preinstalls** are written into the genesis state and are ordinary EVM
- *   contracts. Multicall3 is one, so it returns bytecode here.
- * - **Precompiles** run as native client code outside the EVM. Calls to them
- *   work normally, but there is no bytecode at the address, so this returns
- *   `0x`.
+ *   contracts. Multicall3 is one, so it returns a full body here, and `0x`
+ *   against it would mean the address is wrong. That is a real assertion.
+ * - **Precompiles** run as native client code outside the EVM, so there is no
+ *   contract body to return.
  *
- * The B20 tokenized stocks sit in the `0xb2…` precompile range. If they are true
- * precompiles, an empty result here says nothing about whether the address is
- * real — reading `symbol()` off it does.
+ * The four B20 tokenized stocks sit in the `0xb2…` precompile range and return
+ * **exactly one byte** — verified 2026-09-03 by `verify:chain`. That looks
+ * deliberate: one byte is the cheapest way to be non-empty, which is what the
+ * `isContract`-style check in most routers and every Permit2 path tests before
+ * it will handle a token. It buys compatibility, nothing more.
+ *
+ * So treat this call as a liveness check for ordinary contracts only. It is not
+ * a counterfeit test at any threshold: a fake ERC-20 has plenty of bytecode, and
+ * the real tokens have almost none. `isValidTokenAddress` in `lib/address.ts` is
+ * the guard.
  */
 export function ethGetCode(url: string, address: string): Promise<Hex> {
   return rpcRequest(url, "eth_getCode", [address, "latest"], address);

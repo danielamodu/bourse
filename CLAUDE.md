@@ -36,6 +36,15 @@ and config errors before reporting done, since a build will not catch them for y
   the pattern trustworthy — it cannot be vanity-mined. Validate every token address against
   that shape before using it in a quote, an approval, or a transfer, and hard-fail if it
   does not match. Never resolve a token by symbol search.
+- **Code size is useless as a counterfeit test. Verified 2026-09-03 via `verify:chain`:
+  `eth_getCode` on each of the four tokens returns exactly one byte.** Not `0x`, and not a
+  real contract body either — one byte, which reads as deliberate. It is what makes a native
+  precompile pass the `isContract`-style check that most routers and every Permit2 path apply
+  before they will touch a token, so standard swap infrastructure accepts these without
+  special-casing. The consequence for us: "has code" and "has *this much* code" both tell you
+  nothing about authenticity, and a counterfeit ERC-20 has plenty of bytecode. **The `0xb2`
+  plus-twenty-zeros shape is the only guard.** Do not add a code-size heuristic and do not
+  present one as a safety check.
 - **AAPLc token address:** `0xb200000000000000000000C2e324d24d7eEcd1fb`
   Token addresses sit in the `0xb2…` precompile range. **Chainlink feed addresses are
   separate contracts** and look like ordinary addresses — do not confuse the two.
@@ -54,9 +63,17 @@ and config errors before reporting done, since a build will not catch them for y
   because otherwise the premium figure reads as precise when it isn't. State age factually,
   never as an alarm. For a Lagos user this is the ordinary daytime condition, not an edge
   case: US hours are 13:30–20:00 UTC, which is 14:30–21:00 local.
-- **Feed `decimals()` and token `decimals()` are different numbers.** The Chainlink feed
-  returns 8. The B20 token returns something else. Read each from its own contract and
-  never reuse one value for the other.
+- **Feed `decimals()` and token `decimals()` are separate contracts' answers, read separately.**
+  Both happen to be 8, and that coincidence is the trap: never reuse one value for the other,
+  because nothing guarantees they stay equal. The feed's 8 is a Chainlink convention; the
+  token's 8 is a per-token B20 configuration that the issuer can set differently on the next
+  token it mints.
+- **Token `decimals()` is 8 on all four tradeable tokens — verified on-chain 2026-09-03 via
+  `npm run verify:chain`.** NVDAc, GOOGLc, AAPLc and METAc each return 8 from their own
+  `decimals()`. This is read, not inferred: it previously came from arithmetic on a KyberSwap
+  response, and now it comes from an `eth_call` against each contract. Recording it in the
+  registry as a constant with that provenance is legitimate; re-deriving it from a quote is
+  not.
 - **`mainnet.base.org` rate-limits hard.** Roughly a dozen `eth_call`s in quick succession
   is enough to start getting `over rate limit` back. Serialise reads, keep a short delay
   between them, and rotate across more than one public RPC. This matters for the markets
@@ -65,18 +82,25 @@ and config errors before reporting done, since a build will not catch them for y
   All standard ERC-20 calls behave normally. ERC-2612 `permit` is supported.
 - **No holder allowlist.** Verified by simulating a transfer to an address with no
   Coinbase relationship — it succeeds. Any wallet can hold these tokens.
-- **`decimals()` is NOT 18.** B20 has configurable precision. Always read `decimals()`
-  from the contract and derive all formatting and order sizing from it.
-  Hardcoding 18 produces silently wrong prices.
+- **`decimals()` is NOT 18.** B20 has configurable precision, and on the four tradeable
+  tokens the answer is 8 (see above). Hardcoding 18 produces silently wrong prices — a share
+  count off by ten orders of magnitude. Any token added later gets its `decimals()` read and
+  recorded the same way, never assumed from these four.
 - **Dividends arrive as a multiplier update, not a cash distribution.** Current reading of
   the provider docs: holder balances do **not** change; a WAD-scaled multiplier moves the
   redemption ratio instead. Either way, `balanceOf × price` is wrong on its own — read the
   multiplier and apply it when valuing a position. Confirm the exact semantics against the
   issuer docs before writing any cost-basis or P&L logic.
-- **Route through an aggregator, not a hardcoded venue.** 0x and 1inch both support these
-  tokens and will find liquidity wherever it sits, which matters because most of the 13
-  tokens have no Aerodrome pool. Do **not** install `@uniswap/v3-sdk`,
-  `@uniswap/smart-order-router`, or any `@uniswap/*` package.
+- **Route through an aggregator, not a hardcoded venue — and the aggregator is KyberSwap.**
+  `GET https://aggregator-api.kyberswap.com/base/api/v1/routes`, with an `x-client-id`
+  header. It quotes these tokens and finds liquidity wherever it sits, which matters because
+  most of the 13 have no Aerodrome pool.
+  **0x is not an option: it is compliance-blocked for tokenized equities.** A quote request
+  for one of these tokens comes back `BUY_TOKEN_NOT_AUTHORIZED_FOR_TRADE`, which is a policy
+  decision on 0x's side and not something a parameter change fixes. Do not spend time
+  debugging it and do not reintroduce 0x as a fallback.
+  Do **not** install `@uniswap/v3-sdk`, `@uniswap/smart-order-router`, or any `@uniswap/*`
+  package.
 - **Chainlink reference feeds update 24/5; the pools trade 24/7.** Pool price drifts from
   the reference when US markets are closed.
 
@@ -115,6 +139,8 @@ not listed here. Do not pass a feed address where a token address is expected.
 - **Every user-facing amount displays in NGN.** USDC is internal plumbing, never shown
   as the primary figure.
 - **Read `decimals()` from chain.** Never assume.
+- **No contract address enters the repo because it looked correct in a message.** It is
+  machine-verified in `verify:chain` or it does not ship.
 - **Every buy shows price impact and premium vs the Chainlink reference**, including when
   the reference is stale because US markets are closed.
 - **Do not load the wallet stack on pages that do not need it.** The app browses without a
@@ -230,7 +256,8 @@ address or ABI change.
 ## Stack
 
 Next.js (App Router), TypeScript, wagmi v2 + viem.
-Swaps route through an aggregator (0x or 1inch) — never a hardcoded DEX router.
+Swaps route through KyberSwap's aggregator API — never a hardcoded DEX router, and never 0x
+(compliance-blocked for these tokens; see the aggregator rule above).
 
 ### Dependency stub in `next.config` — leave it alone
 

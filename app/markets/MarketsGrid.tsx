@@ -1,18 +1,20 @@
 "use client";
 
+import { useMemo } from "react";
+
 import { MarketCard } from "@/components/MarketCard";
 import { useClock } from "@/hooks/useClock";
 import { useNGNRate } from "@/hooks/useNGNRate";
 import { cx } from "@/lib/cx";
 import { NGN_PLACEHOLDER, formatNGN, formatUSD } from "@/lib/format";
-import { withNgnRate, type StockPrice } from "@/lib/price";
+import { withMarketPrice, withNgnRate, type StockPrice } from "@/lib/price";
 import {
-  LISTED_ONLY_LIST,
+  STOCK_LIST,
   STOCK_SYMBOLS,
-  TRADEABLE_LIST,
   type StockSymbol,
   type StockToken,
 } from "@/lib/tokens";
+import type { TradeabilityReports } from "@/lib/tradeability";
 
 import styles from "./markets.module.css";
 
@@ -25,18 +27,23 @@ import styles from "./markets.module.css";
  * to run in the browser is the naira rate, which polls so it stays live and
  * survives a failed fetch, and the clock the reference ages are measured against.
  *
- * Group membership is derived, not authored here: `TRADEABLE_LIST` and
- * `LISTED_ONLY_LIST` are both filters over the same registry.
+ * Group membership is derived and never authored: a token is in the first group
+ * when a quote for it came back inside the price-impact budget, measured on the
+ * server this render. There is no registry flag to read — the four that can be
+ * bought today are decided by weekly Aerodrome gauge votes, so an authored list
+ * would be wrong between them.
  */
 
 type MarketsGridProps = {
   /** Reference prices read on the server, in USD. The naira join happens here. */
   prices: Record<StockSymbol, StockPrice>;
+  /** What the aggregator said about each token, probed on the server. */
+  reports: TradeabilityReports;
   /** The server clock when those prices were read. */
   readAtMs: number;
 };
 
-export function MarketsGrid({ prices, readAtMs }: MarketsGridProps) {
+export function MarketsGrid({ prices, reports, readAtMs }: MarketsGridProps) {
   const { rate, isStale } = useNGNRate();
   const nowMs = useClock(readAtMs);
 
@@ -44,15 +51,37 @@ export function MarketsGrid({ prices, readAtMs }: MarketsGridProps) {
     (symbol) => prices[symbol].unusable !== null,
   );
 
-  const card = (token: StockToken, index: number) => (
-    <MarketCard
-      key={token.symbol}
-      token={token}
-      price={withNgnRate(prices[token.symbol], rate)}
-      index={index}
-      nowMs={nowMs}
-    />
+  // One pass over the registry, split by verdict. Order inside each group stays
+  // alphabetical because STOCK_LIST is.
+  const { tradeable, rest } = useMemo(
+    () => ({
+      tradeable: STOCK_LIST.filter(
+        (token) => reports[token.symbol].verdict === "tradeable",
+      ),
+      rest: STOCK_LIST.filter(
+        (token) => reports[token.symbol].verdict !== "tradeable",
+      ),
+    }),
+    [reports],
   );
+
+  const card = (token: StockToken, index: number) => {
+    const report = reports[token.symbol];
+
+    return (
+      <MarketCard
+        key={token.symbol}
+        token={token}
+        price={withMarketPrice(
+          withNgnRate(prices[token.symbol], rate),
+          report.usdPerShare,
+        )}
+        tradeability={report.verdict}
+        index={index}
+        nowMs={nowMs}
+      />
+    );
+  };
 
   return (
     <>
@@ -82,10 +111,17 @@ export function MarketsGrid({ prices, readAtMs }: MarketsGridProps) {
           Tradeable
         </h2>
         <p className={styles.groupNote}>
-          Premium compares a live market quote against the Chainlink reference
-          price. Quoting arrives with buying, so there is nothing to compare yet.
+          Premium compares what a small order costs on Base right now against the
+          Chainlink reference price. The reference publishes on US market hours;
+          the tokens trade all week, so the two drift apart overnight.
         </p>
-        <div className={styles.grid}>{TRADEABLE_LIST.map(card)}</div>
+        <div className={styles.grid}>{tradeable.map(card)}</div>
+        {tradeable.length === 0 ? (
+          <p className={cx(styles.footnote, styles.notice)}>
+            No token returned a usable quote just now, so there is nothing to buy
+            on this page at the moment.
+          </p>
+        ) : null}
       </section>
 
       <section className={styles.group} aria-labelledby="group-listed">
@@ -96,7 +132,7 @@ export function MarketsGrid({ prices, readAtMs }: MarketsGridProps) {
           These stocks are issued on Base but have no pool yet, so they cannot be
           bought here.
         </p>
-        <div className={styles.grid}>{LISTED_ONLY_LIST.map(card)}</div>
+        <div className={styles.grid}>{rest.map(card)}</div>
       </section>
     </>
   );

@@ -5,10 +5,12 @@ import { defineConfig } from "vitest/config";
 /**
  * Unit tests: offline and deterministic, no network, no RPC, no third-party APIs.
  *
- * Chain reads live in `vitest.verify.config.ts` behind `npm run verify:chain`.
- * The exclude below keeps any leftover `*.onchain.test.ts` out of this run — a
- * suite that goes red because a public endpoint rate-limited teaches us to
- * ignore red, which is worse than having no test.
+ * Live checks — chain reads and the KyberSwap aggregator — live in
+ * `vitest.verify.config.ts`, behind `npm run verify:chain` and
+ * `npm run verify:quote`. Nothing under `verify/` matches the include below, so
+ * the separation is structural rather than a list of exceptions — a new offline
+ * test is picked up automatically, and a new network read has to be put somewhere
+ * this run cannot see.
  */
 export default defineConfig({
   resolve: {
@@ -19,6 +21,6 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["{app,hooks,lib}/**/*.test.{ts,tsx}"],
-    exclude: ["**/node_modules/**", "**/*.onchain.test.ts"],
+    exclude: ["**/node_modules/**"],
   },
 });

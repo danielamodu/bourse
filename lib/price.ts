@@ -89,8 +89,54 @@ function toMillis(updatedAt: bigint): number | null {
 }
 
 /**
+ * A billionth of a basis point, to absorb binary-float noise.
+ *
+ * A figure that is a whole number of basis points in exact arithmetic does not
+ * always land on one in floating point, and it can miss on either side. Ceiling
+ * alone handles a value that comes out low: `(30 - 29.94) / 30 * 10_000` evaluates
+ * to 19.999999999999574, and ceiling lifts it back to the 20 it should be. A value
+ * that comes out high is the problem — `(30 - 29.97) / 30 * 10_000` evaluates to
+ * 10.000000000000379, and a bare ceiling would charge 11bps for a route that costs
+ * exactly 10.
+ *
+ * Nine orders of magnitude below a basis point, which is far more than that error
+ * needs and far less than any real cost: a millionth of a basis point still
+ * survives it and rounds up to 1.
+ */
+const BPS_EPSILON = 1e-9;
+
+/**
+ * Rounds a basis-point figure to a whole basis point, always upward.
+ *
+ * THE ROUNDING CONTRACT for every bps figure Bourse displays — the premium below
+ * and the price impact in `lib/quote.ts`. Toward positive infinity, never to
+ * nearest, so the figure can only overstate what the trade costs the person
+ * paying:
+ *
+ * - a cost of a tenth of a basis point reads as 1bp instead of rounding away to
+ *   0, which would claim a route is free;
+ * - a discount of 322.58bps reads as -322, not -323, so a saving is never
+ *   flattered;
+ * - a premium of 344.83bps reads as 345.
+ *
+ * Same principle as `formatQuoteCountdown` flooring the seconds left: where a
+ * figure has to be rounded, round to the reading it is safer to be wrong about.
+ * The error is bounded at one basis point — 0.01%, or ₦5 on a ₦50,000 ticket.
+ */
+export function ceilBps(exactBps: number): number {
+  const bps = Math.ceil(exactBps - BPS_EPSILON);
+  // `Math.ceil` answers -0 for anything in (-1, 0]. Parity has to compare equal
+  // to zero, and `Object.is(-0, 0)` is false.
+  return bps === 0 ? 0 : bps;
+}
+
+/**
  * Premium (positive) or discount (negative) of a traded price against the
  * reference, in basis points. Null when either side is unusable.
+ *
+ * Rounded up in the signed sense — see {@link ceilBps} — so a premium is never
+ * understated and a discount never exaggerated. Both directions round the same
+ * way because both are read by someone deciding whether to pay this price.
  */
 export function computePremiumBps(
   marketUsd: number | null,
@@ -100,7 +146,7 @@ export function computePremiumBps(
   if (!Number.isFinite(marketUsd) || !Number.isFinite(referenceUsd)) return null;
   if (referenceUsd <= 0) return null;
 
-  return Math.round(((marketUsd - referenceUsd) / referenceUsd) * 10_000);
+  return ceilBps(((marketUsd - referenceUsd) / referenceUsd) * 10_000);
 }
 
 /** USD to naira. Null unless both inputs are usable. */
@@ -193,4 +239,22 @@ export function withNgnRate(
   const ngn = toNgn(price.usd, ngnRate);
   if (ngn === price.ngn) return price;
   return { ...price, ngn };
+}
+
+/**
+ * Fills in the premium once there is a traded price to compare.
+ *
+ * The reference comes from Chainlink and the traded price from an aggregator
+ * quote, and the two arrive by different routes at different times, so the join
+ * is separate and pure like the naira one. Null `marketUsd` leaves the premium
+ * blank rather than reporting it as zero — a token nothing will quote has no
+ * premium, which is not the same as trading exactly at the reference.
+ */
+export function withMarketPrice(
+  price: StockPrice,
+  marketUsd: number | null,
+): StockPrice {
+  const premiumBps = computePremiumBps(marketUsd, price.usd);
+  if (premiumBps === price.premiumBps) return price;
+  return { ...price, premiumBps };
 }

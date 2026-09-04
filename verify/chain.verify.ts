@@ -10,7 +10,14 @@ import {
   ethGetCode,
   sleep,
 } from "@/lib/rpc";
-import { CHAINLINK_FEEDS, STOCK_SYMBOLS, TRADEABLE_TOKENS } from "@/lib/tokens";
+import {
+  CHAINLINK_FEEDS,
+  STOCK_SYMBOLS,
+  TOKEN_ADDRESSES,
+  TOKEN_DECIMALS,
+  USDC_ADDRESS,
+  USDC_DECIMALS,
+} from "@/lib/tokens";
 
 /**
  * Every hardcoded address in the repo, checked against Base.
@@ -22,25 +29,34 @@ import { CHAINLINK_FEEDS, STOCK_SYMBOLS, TRADEABLE_TOKENS } from "@/lib/tokens";
  *
  * Two kinds of check, because Base has two kinds of built-in contract:
  *
- * - **Feeds and Multicall3** are ordinary contracts — Multicall3 is a genesis
- *   preinstall, the Chainlink feeds are deployed normally. Both have EVM
- *   bytecode, so `eth_getCode` returning `0x` means the address is wrong. That
- *   is the assertion.
- * - **The four B20 tokens** sit in the `0xb2…` precompile range. A precompile
- *   runs as native client code outside the EVM and has no bytecode at its
- *   address, so `eth_getCode` can legitimately return `0x` for a contract that
- *   answers calls perfectly well. Their passing condition is a successful
- *   `symbol()` returning the expected ticker. Their code is reported for
- *   information only — if it ever comes back non-empty, tighten this then.
+ * - **Feeds, Multicall3 and USDC** are ordinary contracts — Multicall3 is a
+ *   genesis preinstall, the Chainlink feeds and USDC are deployed normally. All
+ *   have EVM bytecode, so `eth_getCode` returning `0x` means the address is wrong.
+ *   That is the assertion.
+ * - **The four B20 tokens** sit in the `0xb2…` precompile range and run as native
+ *   client code outside the EVM. They return **exactly one byte** here, which
+ *   this suite established on 2026-09-03. One byte is the cheapest way to be
+ *   non-empty, and non-empty is what the `isContract`-style check in most routers
+ *   and every Permit2 path requires before it will handle a token — so the byte
+ *   reads as deliberate compatibility, not as a contract body. Their passing
+ *   condition is a successful `symbol()` returning the expected ticker. Their
+ *   code is printed for information and never asserted on.
  *
- * A `0x` against a token address is not evidence of a problem. Those four are
- * already established three other ways: sourced from base.org/stocks, shape
- * checked against `0xb2` + 20 zeros + 18 hex, and confirmed by reading
- * `symbol()` back off each one.
+ * That last point is deliberate and should stay that way: code size is useless as
+ * an authenticity test in either direction. A counterfeit ERC-20 has a full
+ * bytecode body, and the real tokens have one byte, so no threshold separates
+ * them. Asserting on it here would put a check in the suite that looks like a
+ * counterfeit guard and is not one. The shape test — `0xb2` + 20 zeros + 18 hex,
+ * whose zero run cannot be vanity-mined — is the guard, and `symbol()` is what
+ * confirms the transcription.
+ *
+ * Neither `0x` nor one byte against a token address is evidence of a problem.
+ * Those four are established three other ways: sourced from base.org/stocks,
+ * shape checked, and confirmed by reading `symbol()` back off each one.
  *
  * Reads are serialised with a delay and rotate across endpoints, because
  * `mainnet.base.org` rate-limits after roughly a dozen calls in quick
- * succession and this file makes about thirty.
+ * succession and this file makes about thirty-five.
  */
 
 /** `symbol()`. */
@@ -55,6 +71,9 @@ const DEPLOYED: ReadonlyArray<readonly [string, string]> = [
     (symbol) => [`${symbol} feed`, CHAINLINK_FEEDS[symbol]] as const,
   ),
   ["Multicall3", MULTICALL3_ADDRESS],
+  // USDC is an ordinary ERC-20, not a precompile, so it belongs in this group and
+  // not with the four B20 tokens. Every quote is denominated in it.
+  ["USDC", USDC_ADDRESS],
 ];
 
 const EXPECTED_SYMBOLS = [
@@ -63,7 +82,7 @@ const EXPECTED_SYMBOLS = [
   ["AAPL", "AAPLc"],
   ["META", "METAc"],
 ] as const satisfies ReadonlyArray<
-  readonly [keyof typeof TRADEABLE_TOKENS, string]
+  readonly [keyof typeof TOKEN_ADDRESSES, string]
 >;
 
 function describeError(error: unknown): string {
@@ -126,7 +145,7 @@ async function fromAnyEndpoint<T>(
  * One test per address, so a failure names the contract rather than an index.
  * Empty bytecode here means the address is wrong: none of these are precompiles.
  */
-describe("contracts with bytecode: 13 feeds and Multicall3", () => {
+describe("contracts with bytecode: 13 feeds, Multicall3 and USDC", () => {
   for (const [label, address] of DEPLOYED) {
     it(`${label} — ${address}`, async () => {
       const { value: code, url } = await fromAnyEndpoint(
@@ -150,7 +169,7 @@ describe("contracts with bytecode: 13 feeds and Multicall3", () => {
  */
 describe("tokenized stock contracts: symbol() must match", () => {
   for (const [symbol, expected] of EXPECTED_SYMBOLS) {
-    const address = TRADEABLE_TOKENS[symbol];
+    const address = TOKEN_ADDRESSES[symbol];
 
     it(`${expected} — ${address}`, async () => {
       // Never read from an address that fails the shape check.
@@ -167,18 +186,20 @@ describe("tokenized stock contracts: symbol() must match", () => {
         `${symbol}: ${address} reported symbol() as "${onChain}" via ${url}, expected "${expected}"`,
       ).toBe(expected);
 
-      // Reported, never asserted: `0x` is the expected answer for a precompile
-      // and says nothing about whether this address is real.
+      // Reported, never asserted. One byte is the expected answer, and code size
+      // separates nothing from nothing here — see the header.
       const { value: code } = await fromAnyEndpoint(
         `eth_getCode at ${address}`,
         (rpcUrl) => ethGetCode(rpcUrl, address),
       );
+      const codeBytes = (code.length - 2) / 2;
+      const codeSize = `${codeBytes} byte${codeBytes === 1 ? "" : "s"}`;
 
       console.info(
-        `  ${expected} ${address} — symbol() "${onChain}", eth_getCode ${
-          code === "0x"
-            ? "0x (precompile: no EVM bytecode, as expected)"
-            : `${(code.length - 2) / 2} bytes — not a bare precompile, worth tightening this check`
+        `  ${expected} ${address} — symbol() "${onChain}", eth_getCode ${codeSize}${
+          codeBytes === 1
+            ? " (expected: just enough to pass an isContract check)"
+            : " — changed from the one byte verified 2026-09-03; worth noting, still not worth asserting"
         }`,
       );
     });
@@ -186,24 +207,27 @@ describe("tokenized stock contracts: symbol() must match", () => {
 });
 
 /**
- * Token `decimals()`, read rather than assumed.
+ * Token `decimals()`, read rather than assumed — and now asserted.
  *
- * Every share count the buy flow shows rests on this number, and the 8 we have
- * been working from was inferred from arithmetic on a KyberSwap response, not
- * read off the contract. B20 has configurable precision, so it is a per-token
- * property. This prints what each one actually returns.
+ * Every share count the buy flow shows rests on this number. It began as a value
+ * inferred from arithmetic on a KyberSwap response; on 2026-09-03 this suite read
+ * it off all four contracts, all four returned 8, and `TOKEN_DECIMALS` in
+ * lib/tokens records that with this script named as the provenance.
  *
- * It deliberately does not assert 8 — that would encode the guess as a
- * requirement. It asserts only that the answer is an integer we can scale with,
- * inside the bound `scaleBigInt` in lib/price accepts. Note this is the *token's*
- * decimals; the Chainlink feeds return 8 from their own `decimals()`, which is a
- * different number on a different contract.
+ * Because the registry now hardcodes those numbers, the check inverts: it asserts
+ * the contract still returns what the registry claims. B20 precision is a
+ * per-token setting, so a token changing it — or a fifth token being added with a
+ * different one — has to fail here rather than silently misprice every order by
+ * orders of magnitude. Note this is the *token's* decimals; the Chainlink feeds
+ * return 8 from their own `decimals()`, which is a different number on a
+ * different contract and is never substituted for this one.
  */
-describe("token decimals(): read, not assumed", () => {
+describe("token decimals(): read and matched against the registry", () => {
   for (const [symbol, expected] of EXPECTED_SYMBOLS) {
-    const address = TRADEABLE_TOKENS[symbol];
+    const address = TOKEN_ADDRESSES[symbol];
+    const recorded = TOKEN_DECIMALS[symbol];
 
-    it(`${expected} decimals()`, async () => {
+    it(`${expected} decimals() is ${recorded}`, async () => {
       expect(isValidTokenAddress(address), `${symbol} address shape`).toBe(true);
 
       const { value: data, url } = await fromAnyEndpoint(
@@ -214,18 +238,48 @@ describe("token decimals(): read, not assumed", () => {
 
       console.info(`  ${expected} ${address} — decimals() = ${decimals}`);
 
-      if (decimals !== 8) {
-        console.info(
-          `    ^ not 8. Order sizing and share counts for ${expected} must use ${decimals}.`,
-        );
-      }
-
       expect(
-        Number.isInteger(decimals),
-        `${expected}: decimals() returned ${decimals} via ${url}`,
-      ).toBe(true);
-      expect(decimals).toBeGreaterThanOrEqual(0);
-      expect(decimals).toBeLessThanOrEqual(36);
+        decimals,
+        `${expected}: contract returned ${decimals} via ${url}, registry records ${recorded}. Order sizing and every share count use the registry value, so fix lib/tokens before shipping.`,
+      ).toBe(recorded);
     });
   }
+});
+
+/**
+ * USDC, the currency every quote is denominated in.
+ *
+ * Hardcoded in lib/tokens like every other address, so it is machine-verified
+ * like every other address. Its 6 decimals are what naira is converted into
+ * before a quote goes out, so a wrong value here misstates every order size by a
+ * factor of a hundred or more.
+ */
+describe("USDC on Base", () => {
+  it(`symbol() is USDC — ${USDC_ADDRESS}`, async () => {
+    const { value: data, url } = await fromAnyEndpoint(
+      `symbol() at ${USDC_ADDRESS}`,
+      (rpcUrl) => ethCall(rpcUrl, USDC_ADDRESS, SYMBOL_SELECTOR),
+    );
+    const onChain = decodeSymbol(data);
+
+    expect(
+      onChain,
+      `${USDC_ADDRESS} reported symbol() as "${onChain}" via ${url}`,
+    ).toBe("USDC");
+  });
+
+  it(`decimals() is ${USDC_DECIMALS}`, async () => {
+    const { value: data, url } = await fromAnyEndpoint(
+      `decimals() at ${USDC_ADDRESS}`,
+      (rpcUrl) => ethCall(rpcUrl, USDC_ADDRESS, DECIMALS_SELECTOR),
+    );
+    const decimals = decodeDecimals(data);
+
+    console.info(`  USDC ${USDC_ADDRESS} — decimals() = ${decimals}`);
+
+    expect(
+      decimals,
+      `USDC returned ${decimals} via ${url}, lib/tokens records ${USDC_DECIMALS}`,
+    ).toBe(USDC_DECIMALS);
+  });
 });
