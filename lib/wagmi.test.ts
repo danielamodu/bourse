@@ -12,20 +12,23 @@ import { describe, expect, it } from "vitest";
  *   an existing Coinbase Wallet and offers only a fresh passkey Smart Wallet, which
  *   is an empty account. Everyone who can buy here already holds USDC somewhere, so
  *   that path ends in a wallet with nothing in it and no route to the money.
- * - **`injected` before `coinbaseWallet`.** The array order is the order the panel
- *   offers them in, so the first button is "connect the wallet you already have".
+ * - **`injected` before `coinbaseWallet`.** It is the preference the panel starts
+ *   from, so the first button is "connect the wallet you already have".
  *
- * The ordering is checked twice: once against the config wagmi actually built, which
- * is the thing that ships, and once against the source text. The second is not
- * redundant — importing `lib/wagmi.ts` here reaches `wagmi/connectors`, a barrel that
- * pulls the `baseAccount` connector and through it `@x402/*`, which this repo
- * deliberately does not install (see CLAUDE.md). `next.config.ts` aliases those to
- * `false` for the build; vitest honours no such alias, so the import may simply not
- * resolve. When it does not, the text assertions still hold the line, and the run says
- * which half it got.
+ * Both are read from the source text, and this file deliberately does not import
+ * `lib/wagmi.ts`. That import reaches `wagmi/connectors`, a barrel that pulls the
+ * `baseAccount` connector and through it `@x402/*`, which this repo does not install
+ * (see CLAUDE.md): `next.config.ts` aliases those away for the build, and vitest
+ * honours no such alias. Resolving it took longer than the 5s timeout, and it would
+ * cost that on every `npm test` — coupling the fastest suite in the repo to the most
+ * fragile corner of the webpack graph. Do not reintroduce it with a longer timeout.
  *
- * No jsdom. Nothing here renders, and none of these connectors touches a window at
- * construction.
+ * Config order is also not what a user ends up seeing. wagmi appends
+ * EIP-6963-discovered connectors after the configured ones, so the order on screen is
+ * `walletOffer`'s doing and `lib/wallet-offer.test.ts` covers that in eleven cases.
+ * What is left for this file is the config array itself, which is a line of source.
+ *
+ * No jsdom, no network, and nothing imported but `node:fs`.
  */
 
 /** The file itself. `import.meta.url` rather than `__dirname`, which ESM has not got. */
@@ -103,56 +106,4 @@ describe("the connector order", () => {
     // wallet the user deliberately closed.
     expect(CODE).toMatch(/injected\(\s*\{\s*shimDisconnect:\s*true\s*\}\s*\)/);
   });
-
-  it("builds a config whose connectors are in that order", async () => {
-    const config = await loadConfig();
-
-    if (config === null) {
-      // Not a pass disguised as a skip: the source assertions above cover the same
-      // decision, and this branch prints why the stronger check could not run.
-      console.info(
-        "  lib/wagmi.ts did not import here; the source assertions are what held.",
-      );
-      return;
-    }
-
-    const ids = config.connectors.map((connector) => connector.id);
-    const types = config.connectors.map((connector) => connector.type);
-
-    console.info(`  connectors: ${ids.join(", ")}`);
-
-    // `type` rather than `id`, which for Coinbase's connector is the SDK-flavoured
-    // `coinbaseWalletSDK` and has changed across wagmi versions. The ids are printed
-    // above so a rename is visible in the output either way.
-    const injectedAt = types.indexOf("injected");
-    const coinbaseAt = types.indexOf("coinbaseWallet");
-
-    expect(injectedAt, `no injected connector in ${types.join(", ")}`).toBeGreaterThan(
-      -1,
-    );
-    expect(
-      coinbaseAt,
-      `no coinbaseWallet connector in ${types.join(", ")}`,
-    ).toBeGreaterThan(-1);
-
-    expect(
-      injectedAt < coinbaseAt,
-      `connectors are ${ids.join(", ")}; injected has to come first`,
-    ).toBe(true);
-  });
 });
-
-/** The built config, or null when the module cannot be imported in this runtime. */
-async function loadConfig(): Promise<{
-  connectors: readonly { id: string; type: string }[];
-} | null> {
-  try {
-    const loaded = await import("./wagmi");
-    return loaded.config;
-  } catch (error) {
-    console.info(
-      `  import failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return null;
-  }
-}

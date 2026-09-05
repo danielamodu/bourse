@@ -1,3 +1,4 @@
+import { getAddress } from "viem";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -402,12 +403,29 @@ describe("requestQuote: echo guards", () => {
  * nothing — is `failed`, and no quote reaches the panel from it.
  */
 describe("the router pin", () => {
-  it("pins an address, not a shape", () => {
+  it("pins a checksummed address, not a shape", () => {
     // Asserted here so the constant cannot be edited to something ill-formed
     // without a test going red. Its authenticity comes from `verify:chain` proving
     // it has bytecode and `verify:quote` seeing the live API name it — never from
     // this file.
-    expect(KYBERSWAP_ROUTER_ADDRESS).toMatch(/^0x[0-9a-f]{40}$/);
+    //
+    // The pattern accepts either case. Checksum casing is cosmetic on the wire and
+    // the constant carries it, so a lowercase-only pattern would reject the pin
+    // itself; it did, which is why this reads `a-fA-F`.
+    expect(KYBERSWAP_ROUTER_ADDRESS).toMatch(/^0x[0-9a-fA-F]{40}$/);
+
+    // Forty hex characters is a shape. EIP-55 casing is the only transcription
+    // check an address carries: the pattern of upper and lower case is derived from
+    // the address's own keccak hash, so a single wrong character re-randomises it
+    // and fails — EIP-55 puts the residual chance of a mistyped address passing at
+    // 0.0247%. That is exactly the failure that put a dead address in this
+    // constant, and it is the failure a shape check cannot see.
+    //
+    // `getAddress` re-derives the casing rather than validating it, so equality is
+    // the assertion: it holds only when the constant is already canonical, and a
+    // failure prints both strings. Never lowercase the constant to make this pass —
+    // that removes the check instead of satisfying it.
+    expect(getAddress(KYBERSWAP_ROUTER_ADDRESS)).toBe(KYBERSWAP_ROUTER_ADDRESS);
   });
 
   it("refuses a route through any other router", async () => {

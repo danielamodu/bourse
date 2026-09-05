@@ -57,8 +57,18 @@ export const KYBERSWAP_ROUTES_URL =
  *
  * So the response's own `routerAddress` is treated as an echo to check, exactly
  * like `tokenIn`, `tokenOut` and `amountIn`: it has to match this, or there is no
- * quote. Comparison is case-insensitive because EIP-55 checksum casing is
- * cosmetic and KyberSwap returns this one lowercase.
+ * quote. Comparison is case-insensitive, because checksum casing is cosmetic on
+ * the wire: this repo has seen KyberSwap answer with the address lowercase, and a
+ * case-sensitive compare would reject every real response the day that changes.
+ *
+ * CASING: the constant itself stays in canonical EIP-55 form, and is not to be
+ * lowercased to satisfy a pattern. Cosmetic on the wire is not cosmetic here. The
+ * mix of upper and lower case is derived from the address's own keccak hash, which
+ * makes it the one transcription check the value carries: mistype a character and
+ * the casing no longer matches, at a residual risk EIP-55 puts at 0.0247%. Forty
+ * hex characters, by contrast, is a shape a wrong address still has. That check is
+ * asserted on this constant in `lib/quote.test.ts` and on every address the repo
+ * pins in `lib/address.test.ts`, both offline.
  *
  * PROVENANCE: observed by `npm run verify:quote` on 2026-09-04 as the router for
  * all four tradeable tokens, and asserted to have bytecode by
@@ -66,7 +76,7 @@ export const KYBERSWAP_ROUTES_URL =
  * `isValidTokenAddress` does not and must not apply to it.
  */
 export const KYBERSWAP_ROUTER_ADDRESS =
-  "0x61354c7f0345dfb519b79dbddca059db53f237b5";
+  "0x6131B5fae19EA4f9D964eAc0408E4408b66337b5";
 
 /**
  * Detail strings for the two ways the router check can fail. Distinct constants

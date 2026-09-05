@@ -59,9 +59,15 @@ export type StockSymbol = (typeof STOCK_SYMBOLS)[number];
 /**
  * Chainlink reference feeds. Verbatim from CLAUDE.md — do not re-source or
  * reformat these; each one was confirmed by reading `description()` off it.
+ *
+ * "Reformat" covers the casing. These are canonical EIP-55, which is the only
+ * transcription check an address carries: the mix of upper and lower case is
+ * derived from the address's own keccak hash, so a mistyped character stops
+ * matching it. Lowercasing one to tidy it up, or to satisfy a pattern, throws that
+ * away. `lib/address.test.ts` asserts the checksum on all thirteen, offline.
  */
 export const CHAINLINK_FEEDS = {
-  AAPL: "0x787F13dEa48Db0897CbCDD985de77809D837F988",
+  AAPL: "0x787f13dEa48Db0897CbCDD985de77809D837F988",
   AMZN: "0x06A8E4b3aBB3B7543d8396FB2B763d22820cB295",
   COIN: "0x408e44f504A7371a345F03a73dDC96A4b48e8aa7",
   CRCL: "0x0231cF2635D1E17bB5c2462cc7504Ba1fBd61f33",
@@ -71,7 +77,7 @@ export const CHAINLINK_FEEDS = {
   MSFT: "0xeB10A6c9aa7E537aEd766C08c35Dae35B321b18c",
   MSTR: "0xB3cE282CD188b35DA0E38D8Bc7d58e33173D202a",
   NVDA: "0x04689a41629776563E6822F76f2e57D148d28513",
-  SNDK: "0x388b0dC46C0Fb05A74BeE0994Fa5b02c6Fcca2eA",
+  SNDK: "0x388b0dC46C0Fb05A74BeE0994fa5b02c6Fcca2eA",
   SPCX: "0x6A634B235903C4ad6376892180d6fF8612e3Fa68",
   TSLA: "0xFaf869185383a24F8cb00e27BdA6b63B9905DCb4",
 } as const satisfies Record<StockSymbol, Address>;
@@ -84,9 +90,13 @@ export const CHAINLINK_FEEDS = {
  * aggregator about. The remaining nine are issued but unpublished, so there is
  * nothing to quote against.
  *
- * Each of the four was transcribed by hand and is checked two ways before it can
- * ship: the shape assertion below, at import time, and `symbol()` read back off
- * the contract in `verify/chain.verify.ts`.
+ * Each of the four was transcribed by hand and is checked three ways before it can
+ * ship: the shape assertion below, at import time; the EIP-55 checksum, in
+ * `lib/address.test.ts`, which is what catches a wrong character in the tail that
+ * the shape check reads as valid hex; and `symbol()` read back off the contract in
+ * `verify/chain.verify.ts`. The casing carries the second of those, so these stay
+ * canonical — the twenty zeros have no case, and everything either side of them
+ * does.
  */
 export const TOKEN_ADDRESSES = {
   NVDA: "0xb20000000000000000000078ee7ce2fE4908108C",
@@ -146,6 +156,10 @@ export const TOKEN_DECIMALS = {
  * does not and must not apply to it. It is machine-verified in
  * `verify/chain.verify.ts` the way every other hardcoded address is: bytecode
  * present, `symbol()` reads back `USDC`, `decimals()` reads back 6.
+ *
+ * Canonical EIP-55 casing, asserted offline in `lib/address.test.ts` beside every
+ * other address the repo pins. The casing is a transcription check rather than
+ * decoration, so it is not to be lowercased.
  */
 export const USDC_ADDRESS =
   "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const;

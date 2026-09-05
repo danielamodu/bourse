@@ -31,7 +31,10 @@ export const BASE_CHAIN_ID = 8453;
  * Copied from `node_modules/viem/_esm/chains/definitions/base.js`, which carries
  * `0xca11bde05977b3631167028862be2a173976ca11` with `blockCreated: 5022`. Kept
  * in EIP-55 checksum casing — the same address, and the capitalisation is itself
- * a check on a value that was copied by hand.
+ * a check on a value that was copied by hand. `lib/address.test.ts` is where that
+ * check runs, on this and every other pinned address: it re-derives the casing
+ * from the address and compares, so a mistyped character fails `npm test` rather
+ * than an `eth_call`. Keep it canonical; lowercasing it removes the check.
  *
  * This one is a genesis preinstall, so it has real EVM bytecode and
  * `eth_getCode` returns a full body. The B20 token addresses return one byte
