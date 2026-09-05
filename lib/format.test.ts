@@ -7,6 +7,7 @@ import {
   formatConnectorName,
   formatCostBps,
   formatFeedAge,
+  formatFloor,
   formatNGN,
   formatNGNAmount,
   formatPremiumBps,
@@ -297,6 +298,35 @@ describe("formatShares", () => {
     expect(formatShares(null)).toBe(SHARES_PLACEHOLDER);
     expect(formatShares(Number.NaN)).toBe(SHARES_PLACEHOLDER);
     expect(formatShares(Number.POSITIVE_INFINITY)).toBe(SHARES_PLACEHOLDER);
+  });
+});
+
+describe("formatFloor", () => {
+  it("states the floor in shares and in naira", () => {
+    // 0.04975 shares at ₦990,000 a share. Shares lead because they are the thing
+    // being received; the naira figure is what they are worth at this price.
+    expect(normalise(formatFloor(0.04975, 49_252.5, "NVDAc"))).toMatch(
+      /^0\.04975 NVDAc \((?:₦ ?|NGN )49,253\)$/,
+    );
+  });
+
+  it("states the share floor alone when there is no rate", () => {
+    // The disclosure survives a missing rate. Dropping it would remove a slippage
+    // statement because a currency conversion was unavailable.
+    expect(formatFloor(0.04975, null, "NVDAc")).toBe("0.04975 NVDAc");
+  });
+
+  it("states a zero floor, which is a real answer", () => {
+    // `minAmountOutFor` floors by integer division, so a dust-sized route can floor
+    // to nothing. Saying so is more use than a dash.
+    expect(normalise(formatFloor(0, 0, "NVDAc"))).toMatch(
+      /^0\.000000 NVDAc \((?:₦ ?|NGN )0\.00\)$/,
+    );
+  });
+
+  it("returns the placeholder only when there is no floor at all", () => {
+    expect(formatFloor(null, 49_252.5, "NVDAc")).toBe(SHARES_PLACEHOLDER);
+    expect(formatFloor(Number.NaN, null, "NVDAc")).toBe(SHARES_PLACEHOLDER);
   });
 });
 

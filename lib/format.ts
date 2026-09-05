@@ -169,6 +169,31 @@ export function formatShares(shares: number | null): string {
 }
 
 /**
+ * The slippage floor as the trade panel states it: `0.04975 NVDAc (₦49,253)`.
+ *
+ * Shares first, because shares are the thing being received and the floor is a
+ * statement about them. The naira figure is what that many shares are worth at the
+ * price this quote was struck at, bracketed for the same reason the spread's
+ * percentage is: one is the fact, the other is the way to weigh it.
+ *
+ * The naira half drops out rather than blanking the line when there is no rate — the
+ * share floor is true without one, and this is a disclosure, not a nicety. The
+ * placeholder is only for having no floor at all.
+ */
+export function formatFloor(
+  shares: number | null,
+  ngn: number | null,
+  tokenSymbol: string,
+): string {
+  if (shares === null || !Number.isFinite(shares)) return SHARES_PLACEHOLDER;
+
+  const received = `${formatShares(shares)} ${tokenSymbol}`;
+  if (ngn === null || !Number.isFinite(ngn)) return received;
+
+  return `${received} (${formatNGNAmount(ngn)})`;
+}
+
+/**
  * Time left on a quote, as words: `30 seconds`, `1 second`, `expired`.
  *
  * Plain and factual — the copy rule forbids urgency, so this states a duration

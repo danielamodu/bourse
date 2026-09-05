@@ -12,7 +12,9 @@ import { defineConfig } from "vitest/config";
  * - `npm run verify:chain` — reads against Base, after an address or ABI change.
  * - `npm run verify:quote` — the KyberSwap aggregator, after a change to the
  *   request, the response mapping, or `NO_ROUTE_MESSAGE`.
- * - `npm run verify` — both.
+ * - `npm run verify:build` — the aggregator's build endpoint, after a change to the
+ *   build request, its guards, or the router pin. Builds calldata and signs nothing.
+ * - `npm run verify` — all three.
  *
  * Each script names its file so that verifying an address does not fire live
  * aggregator requests, and vice versa.

@@ -1,6 +1,6 @@
 "use client";
 
-import { useWallet } from "@/hooks/useWallet";
+import type { UseWalletResult } from "@/hooks/useWallet";
 import { cx } from "@/lib/cx";
 import {
   formatAddressShort,
@@ -34,11 +34,23 @@ import styles from "./WalletConnect.module.css";
  * does the same thing. `hooks/useWallet.ts` puts them in order, so the first is the
  * wallet someone already has.
  *
- * Read-only, like the rest of Phase 3 Part A. There is no approve, no sign and no
- * submit here; connecting exists so balances can be read.
+ * IT DOES NOT CALL `useWallet` ITSELF, and that is not tidiness. The trade panel beside
+ * it needs the same wallet state — `useTrade` treats anything but `ready` as a block —
+ * and two calls to the hook would mean two independent sets of balance reads against a
+ * rate-limited RPC, which could disagree with each other on screen. One call in
+ * `TradeDetail` feeds both, so the wallet the panel gates on is the wallet this
+ * describes.
+ *
+ * Connecting still signs nothing and spends nothing. The signatures live in the trade
+ * panel's own button, and every control here reads a balance or changes a network.
  */
 
-export function WalletConnect() {
+export type WalletConnectProps = {
+  /** One `useWallet()` call, made by the page and shared with the trade panel. */
+  wallet: UseWalletResult;
+};
+
+export function WalletConnect({ wallet }: WalletConnectProps) {
   const {
     state,
     address,
@@ -50,7 +62,7 @@ export function WalletConnect() {
     disconnect,
     switchToBase,
     refetchBalances,
-  } = useWallet();
+  } = wallet;
 
   return (
     <section className={styles.panel} aria-labelledby="wallet-title">

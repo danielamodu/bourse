@@ -12,8 +12,9 @@ import { BASE_CHAIN_ID } from "@/lib/rpc";
  * answers, so an embedded or passkey wallet is a new connector rather than a new
  * branch, and none of the reasoning below has to change to support one.
  *
- * Read-only, like everything else in Bourse so far: no approval, no signature, no
- * submission. This decides what to show, not what to send.
+ * It decides what to show, never what to send. `hooks/useTrade.ts` is what signs,
+ * and it treats anything but `ready` here as a block — which is why a state on this
+ * union going wrong is a state that could let a signature be asked for too early.
  */
 
 /** wagmi's `useAccount().status`, narrowed to the shape this module reasons about. */
@@ -49,12 +50,16 @@ export type WalletInput = {
    */
   balancesFailed: boolean;
   /**
-   * The USD value of that ETH balance, when something can price it. Null
-   * otherwise, which switches the low-balance warning off rather than guessing.
+   * The current quote's estimated network fee in wei. Null with no quote, or when
+   * the route carried no usable gas figure.
+   *
+   * Wei rather than dollars, and that is the whole of the fix: this used to be a USD
+   * pair that nothing could ever fill, because Bourse has no ETH price source, so
+   * the warning was permanently off. `Quote.gasWei` is `gas * gasPrice` off the
+   * route summary, which compares directly against {@link WalletInput.ethWei}
+   * without a price for anything.
    */
-  ethUsd: number | null;
-  /** The current quote's estimated network fee in USD. Null with no quote. */
-  gasUsd: number | null;
+  gasWei: bigint | null;
 };
 
 export type WalletState =
@@ -75,8 +80,8 @@ export type WalletState =
   /** ETH but no USDC, so there is nothing to spend. Blocking. */
   | { kind: "no-usdc" }
   /**
-   * Funded and on Base. `lowEth` is a warning, never a block — the balance is
-   * below the estimated network fee for the quote on screen.
+   * Funded and on Base. `lowEth` is a warning, never a block — there is not much
+   * more ETH here than one transaction's fee, and a buy is two of them.
    */
   | { kind: "ready"; lowEth: boolean };
 
@@ -105,8 +110,8 @@ export type WalletState =
  * THE ETH THRESHOLD is deliberately asymmetric. Only a genuinely zero balance
  * blocks; anything above zero is `ready`. Measured gas on these routes is three to
  * five cents, so a wallet with any ETH in it almost certainly has enough, and a
- * threshold set higher would refuse trades that would have gone through. Below the
- * quote's own estimate it warns instead — see {@link isLowEth}.
+ * threshold set higher would refuse trades that would have gone through. Thin
+ * against the quote's own estimate it warns instead — see {@link isLowEth}.
  */
 export function walletState({
   hasConnector,
@@ -115,8 +120,7 @@ export function walletState({
   ethWei,
   usdcUnits,
   balancesFailed,
-  ethUsd,
-  gasUsd,
+  gasWei,
 }: WalletInput): WalletState {
   if (phase === "connecting" || phase === "reconnecting") {
     return { kind: "connecting" };
@@ -150,27 +154,40 @@ export function walletState({
   if (ethWei <= 0n) return { kind: "no-eth" };
   if (usdcUnits <= 0n) return { kind: "no-usdc" };
 
-  return { kind: "ready", lowEth: isLowEth(ethUsd, gasUsd) };
+  return { kind: "ready", lowEth: isLowEth(ethWei, gasWei) };
 }
 
 /**
- * Whether the ETH balance is below the network fee the current quote estimates.
+ * How many transactions' worth of gas a wallet should hold before we stop warning.
  *
- * A warning, not a gate. It needs both sides in the same unit, and the quote states
- * its fee in USD, so this compares USD to USD. Without a price for the user's ETH
- * there is no comparison to make and no warning to give — false, not true, because
- * a warning we cannot substantiate would tell people to add ETH they may already
- * have plenty of.
+ * Two, because a buy is two transactions: an approval and a swap. A wallet holding
+ * exactly one fee's worth gets through the approval and then fails at the second
+ * signature, which is the worst place to run out — the allowance is set, the gas is
+ * spent, and nothing was bought.
  *
- * A non-positive or unreadable estimate is also no warning: it means the route
- * carried no gas figure, which the panel already shows as a blank network fee.
+ * It is a floor with margin rather than a precise figure. Base fees move with L1
+ * calldata prices and can rise between the two signatures, and the estimate itself
+ * is the aggregator's.
  */
-function isLowEth(ethUsd: number | null, gasUsd: number | null): boolean {
-  if (ethUsd === null || gasUsd === null) return false;
-  if (!Number.isFinite(ethUsd) || !Number.isFinite(gasUsd)) return false;
-  if (gasUsd <= 0) return false;
+export const GAS_HEADROOM = 2n;
 
-  return ethUsd < gasUsd;
+/**
+ * Whether the ETH balance is thin against what this quote's two transactions cost.
+ *
+ * A warning, not a gate: {@link walletState} only blocks on a genuinely zero
+ * balance. Both sides are wei, so no ETH price is involved and the comparison holds
+ * in the case that matters — someone who bought USDC on an exchange, withdrew it to
+ * Base and has never held any ETH. Before this was in wei it compared two USD
+ * figures that nothing in the app could supply, so it never fired at all.
+ *
+ * No quote, or no usable gas figure on the route, is no warning: null and
+ * non-positive both mean there is nothing to compare, and a warning we cannot
+ * substantiate would tell people to add ETH they may already have plenty of.
+ */
+function isLowEth(ethWei: bigint, gasWei: bigint | null): boolean {
+  if (gasWei === null || gasWei <= 0n) return false;
+
+  return ethWei < gasWei * GAS_HEADROOM;
 }
 
 /** EIP-1193's rejection code, and the string some injected wallets send instead. */

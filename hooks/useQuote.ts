@@ -33,8 +33,10 @@ import {
  *   rather than leaving a dead one on screen, so what the panel shows is either
  *   current or visibly being refreshed.
  *
- * Read-only, like everything in Phase 3 Part A: this asks what a trade would
- * cost. No approval, no signature, no submission.
+ * It prices, and it signs nothing. Every signature in Bourse is in
+ * `hooks/useTrade.ts`, which takes the quote this holds and treats its expiry as the
+ * clock for the whole panel — one countdown, so a price cannot be current here and
+ * stale there.
  *
  * The naira rate is passed in rather than polled here. `useStockPrices` already
  * holds one from `useNGNRate`, and a second poller would mean two rates on one

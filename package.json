@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "verify": "vitest run --config vitest.verify.config.ts",
+    "verify:build": "vitest run --config vitest.verify.config.ts verify/build.verify.ts",
     "verify:chain": "vitest run --config vitest.verify.config.ts verify/chain.verify.ts",
     "verify:quote": "vitest run --config vitest.verify.config.ts verify/quote.verify.ts"
   },

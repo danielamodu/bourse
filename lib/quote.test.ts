@@ -61,6 +61,7 @@ function summary(overrides: SummaryOverrides = {}): Record<string, unknown> {
     amountOut: UNITS_OUT,
     amountOutUsd: "29.94",
     gas: "220000",
+    gasPrice: "10000000",
     gasUsd: "0.004",
     routerAddress: ROUTER,
     ...overrides,
@@ -221,6 +222,35 @@ describe("requestQuote: a priced route", () => {
     );
 
     expect(quote.gasUsd).toBeNull();
+  });
+
+  it("multiplies the gas legs into wei", async () => {
+    // 220,000 units at 0.01 gwei. Wei rather than dollars because the figure is
+    // compared against an ETH balance, and no ETH price is available to do that in
+    // USD -- see the low-ETH warning in `lib/wallet-state.ts`.
+    const quote = expectQuote(await quoteFor(() => routed()));
+
+    expect(quote.gasWei).toBe(2_200_000_000_000n);
+  });
+
+  it("leaves gas in wei null when either leg is missing", async () => {
+    for (const missing of ["gas", "gasPrice"]) {
+      const quote = expectQuote(
+        await quoteFor(() => routed({ [missing]: undefined })),
+      );
+
+      // Null and not zero. Zero wei would read as a free transaction and switch
+      // off the very warning this figure exists to raise.
+      expect(quote.gasWei, `without ${missing}`).toBeNull();
+    }
+  });
+
+  it("leaves gas in wei null when a leg is zero or unreadable", async () => {
+    for (const gasPrice of ["0", "-1", "1.5", "0x10", "", "lots"]) {
+      const quote = expectQuote(await quoteFor(() => routed({ gasPrice })));
+
+      expect(quote.gasWei, `gasPrice ${gasPrice}`).toBeNull();
+    }
   });
 
   it("falls back to the envelope's routerAddress", async () => {
@@ -822,6 +852,9 @@ describe("the browser seam", () => {
     // numbers on the way.
     expect(wire.usdcIn).toBe("30000000");
     expect(wire.unitsOut).toBe("5000000");
+    // A third exact value, for the same reason. Wei is well past what a float can
+    // hold at a realistic gas price, so it crosses as a string too.
+    expect(wire.gasWei).toBe("2200000000000");
 
     const back = parseQuoteWire(JSON.parse(JSON.stringify(wire)) as unknown);
     expect(back).toEqual(result);

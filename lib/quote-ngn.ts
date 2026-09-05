@@ -121,6 +121,51 @@ export function withNgnQuote(
 }
 
 /**
+ * The slippage floor, in the two units a person can weigh.
+ *
+ * `minAmountOut` is the number encoded in the calldata: settle below it and the swap
+ * reverts. It is the honest slippage disclosure, so the panel states it outright
+ * rather than putting it behind a tooltip — but base units in a token's own decimals
+ * are not a disclosure to anyone, hence shares, and naira beside them because every
+ * user-facing amount in Bourse is naira.
+ *
+ * WHAT THE NAIRA FIGURE MEANS, precisely: what the fewest shares this trade can
+ * return are worth at the price this quote was struck at. It is *not* "the least you
+ * will pay" — the amount paid is fixed, and it is the shares received that can come
+ * out lower. Getting that backwards in the copy would turn a protection into an
+ * apparent discount, so the panel labels it as the least received.
+ *
+ * Nulls propagate rather than becoming zeros: no floor, no decimals for the token,
+ * or no rate each blank the row, and a zero would read as "you could receive
+ * nothing".
+ */
+export function floorNgn(
+  minAmountOut: bigint | null,
+  decimals: number | null,
+  ngnPerShare: number | null,
+): { shares: number | null; ngn: number | null } {
+  const blank = { shares: null, ngn: null };
+
+  if (minAmountOut === null || minAmountOut < 0n) return blank;
+  if (decimals === null) return blank;
+
+  // `scaleBigInt` answers NaN for a decimals value it will not scale by, which is
+  // the one case a token with no published `decimals()` could reach this.
+  const shares = scaleBigInt(minAmountOut, decimals);
+  if (!Number.isFinite(shares)) return blank;
+
+  const worth =
+    ngnPerShare === null || !Number.isFinite(ngnPerShare)
+      ? null
+      : shares * ngnPerShare;
+
+  return {
+    shares,
+    ngn: worth !== null && Number.isFinite(worth) ? worth : null,
+  };
+}
+
+/**
  * The quotable order size, in naira, at today's rate.
  *
  * The band itself is denominated in USDC because that is what the aggregator

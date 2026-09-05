@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { quoteBandNgn, withNgnQuote } from "@/lib/quote-ngn";
+import { floorNgn, quoteBandNgn, withNgnQuote } from "@/lib/quote-ngn";
 import {
   BOURSE_FEE_BPS,
   KYBERSWAP_ROUTER_ADDRESS,
@@ -28,6 +28,9 @@ function quote(overrides: Partial<Quote> = {}): Quote {
     usdPerShare: 600,
     executionCostBps: 20,
     gasUsd: 0.004,
+    // 220,000 gas at 0.01 gwei. Naira never sees this figure; it exists for the
+    // low-ETH warning, which compares wei against a wallet balance.
+    gasWei: 2_200_000_000_000n,
     // The pin. `Quote.routerAddress` is a string, not `string | null`: a route
     // through any other router never becomes a `Quote`.
     routerAddress: KYBERSWAP_ROUTER_ADDRESS,
@@ -175,6 +178,64 @@ describe("withNgnQuote: the cost breakdown", () => {
     // rest.
     expect(withNgnQuote(quote({ gasUsd: null }), RATE).totalNgn).toBeNull();
     expect(withNgnQuote(quote(), null).totalNgn).toBeNull();
+  });
+});
+
+/**
+ * The slippage floor, in shares and naira.
+ *
+ * The token's own decimals are the trap here, and they are 8 rather than 18 on every
+ * one of these four — so a helper that assumed 18 would state a floor ten orders of
+ * magnitude too small and nobody would notice, because a tiny floor still passes
+ * every sanity check a reader applies to it.
+ */
+describe("floorNgn", () => {
+  it("scales base units by the token's own decimals", () => {
+    // 5,000,000 units at 8 decimals is 0.05 shares, less 50bps is 0.049750.
+    expect(floorNgn(4_975_000n, 8, 990_000)).toEqual({
+      shares: 0.04975,
+      ngn: 49_252.5,
+    });
+  });
+
+  it("does not assume 18", () => {
+    // The same figure read at 18 decimals, which is what a hardcoded assumption
+    // would produce. Kept as a test rather than a comment because the wrong answer
+    // is not obviously wrong on screen.
+    const wrong = floorNgn(4_975_000n, 18, 990_000);
+
+    expect(wrong.shares).toBeCloseTo(4.975e-12, 20);
+    expect(wrong.shares).not.toBe(0.04975);
+  });
+
+  it("blanks both figures without a floor or a decimals to scale by", () => {
+    expect(floorNgn(null, 8, 990_000)).toEqual({ shares: null, ngn: null });
+    // A token with no published address has no `decimals()` read from it, and
+    // inventing one is the assumption CLAUDE.md forbids.
+    expect(floorNgn(4_975_000n, null, 990_000)).toEqual({
+      shares: null,
+      ngn: null,
+    });
+  });
+
+  it("still states the share floor without a naira rate", () => {
+    // The shares figure is true without a rate. Blanking it too would remove the
+    // disclosure because a currency conversion was missing.
+    expect(floorNgn(4_975_000n, 8, null)).toEqual({
+      shares: 0.04975,
+      ngn: null,
+    });
+  });
+
+  it("refuses a negative floor rather than reporting one", () => {
+    expect(floorNgn(-1n, 8, 990_000)).toEqual({ shares: null, ngn: null });
+  });
+
+  it("reads a zero floor as zero, which is a real answer", () => {
+    // Reachable: `minAmountOutFor` floors by integer division, so a dust-sized
+    // `amountOut` can floor to nothing. Zero shares is what the calldata would
+    // enforce, and saying so is more use than a dash.
+    expect(floorNgn(0n, 8, 990_000)).toEqual({ shares: 0, ngn: 0 });
   });
 });
 

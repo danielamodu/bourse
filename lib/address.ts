@@ -1,4 +1,4 @@
-import type { Address } from "viem";
+import { getAddress, type Address } from "viem";
 
 /**
  * Token address shape check.
@@ -57,4 +57,60 @@ export function assertValidTokenAddress(
   }
 
   return value;
+}
+
+/** Any address, in any casing. Forty hex characters and nothing else. */
+const ADDRESS_SHAPE = /^0x[0-9a-fA-F]{40}$/;
+
+/** All zeros. A sentinel, never an account, and never a recipient. */
+const ZERO_ADDRESS_SHAPE = /^0x0{40}$/;
+
+/**
+ * A wallet address, canonicalised, or null.
+ *
+ * For the addresses that are *not* tokens: the `sender` of a swap, and therefore
+ * the recipient of everything it buys. {@link isValidTokenAddress} must not be used
+ * on one — a wallet is not a `0xb2…` precompile and would fail that shape — and
+ * this must not be used on a token, because forty hex characters is precisely the
+ * check that a counterfeit passes. They are different questions about different
+ * kinds of address; CLAUDE.md keeps feed, token and ordinary addresses apart for
+ * the same reason.
+ *
+ * WHAT IT RETURNS is the canonical EIP-55 form, not the string it was given. The
+ * value goes into a request body as both `sender` and `recipient`, so normalising
+ * once here means every downstream comparison is against one spelling.
+ *
+ * WHY CASING IS CHECKED. A mixed-case address carries a transcription check: the
+ * pattern of upper and lower case is derived from the address's own keccak hash, so
+ * one wrong character stops matching it. That check is worth running here more than
+ * anywhere else in the app, because the swap's output goes to this address and
+ * nowhere else — a mangled sender does not fail loudly, it buys shares for an
+ * account nobody holds the key to. So a mixed-case address must already be
+ * canonical, while an all-lowercase or all-uppercase one is accepted and
+ * canonicalised: those carry no case information to check, and refusing them would
+ * reject addresses that are merely written plainly.
+ *
+ * The zero address is refused outright. It is well-shaped, it passes any checksum
+ * test, and it is what an uninitialised field serialises to.
+ */
+export function parseAddress(value: unknown): Address | null {
+  if (typeof value !== "string") return null;
+
+  const trimmed = value.trim();
+  if (!ADDRESS_SHAPE.test(trimmed)) return null;
+  if (ZERO_ADDRESS_SHAPE.test(trimmed)) return null;
+
+  // Lowercased first, deliberately. `getAddress` derives the casing from the
+  // address's own hash but leaves characters it does not need to uppercase exactly
+  // as it found them, so handing it an all-uppercase address returns an
+  // all-uppercase address. From a lowercase input it returns the canonical form.
+  const canonical = getAddress(trimmed.toLowerCase());
+
+  const body = trimmed.slice(2);
+  const carriesChecksum =
+    body !== body.toLowerCase() && body !== body.toUpperCase();
+
+  if (carriesChecksum && canonical !== trimmed) return null;
+
+  return canonical;
 }

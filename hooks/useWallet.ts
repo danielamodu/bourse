@@ -36,10 +36,22 @@ import {
  * an embedded or passkey wallet is a new entry in `lib/wagmi.ts` rather than a new
  * branch in this file.
  *
- * Read-only. The wallet is connected so that balances can be read and a state can be
- * reported. No approval, no signature, no transaction — nothing here can move a
- * token.
+ * Still reads only. The wallet is connected here so balances can be read and a state
+ * reported; `hooks/useTrade.ts` is the one place that asks for a signature, and it
+ * takes this hook's `state` as its gate rather than reading wagmi again.
  */
+
+export type UseWalletInput = {
+  /**
+   * The current quote's estimated fee in wei, from `Quote.gasWei`. Null with no
+   * quote on screen, which switches the low-ETH warning off.
+   *
+   * The whole reason the hook takes an argument at all. The warning compares a fee
+   * against a balance, so it needs the fee, and the fee belongs to the quote rather
+   * than to the wallet.
+   */
+  gasWei?: bigint | null;
+};
 
 export type UseWalletResult = {
   /** What to render. The whole of the decision, from `lib/wallet-state.ts`. */
@@ -86,7 +98,7 @@ export type WalletOption = {
 /** The connector type this config produces, taken from wagmi rather than restated. */
 type WalletConnector = ReturnType<typeof useConnectors>[number];
 
-export function useWallet(): UseWalletResult {
+export function useWallet({ gasWei = null }: UseWalletInput = {}): UseWalletResult {
   const { address, chainId, status } = useAccount();
   const connectors = useConnectors();
   const {
@@ -152,16 +164,15 @@ export function useWallet(): UseWalletResult {
     usdcUnits: usdc.data ?? null,
     balancesFailed: eth.isError || usdc.isError,
     /*
-     * The low-ETH warning is wired but inert, and that is on purpose.
+     * Wei against wei, so the warning actually fires.
      *
-     * It compares the USD value of the user's ETH against the quote's own gas
-     * estimate, and there is no verified ETH/USD source in this repo — no feed
-     * address that has been through `verify:chain`, no rate endpoint. Null switches
-     * the warning off rather than guessing, because a warning we cannot substantiate
-     * would tell people to add ETH they may already have plenty of.
+     * It used to be a pair of USD figures, and there is no verified ETH/USD source
+     * in this repo to fill them with — so it was permanently off for the person it
+     * was written for: someone who bought USDC on an exchange, withdrew it to Base,
+     * and holds no ETH to pay a fee with. `gas * gasPrice` off the route summary
+     * needs no price for anything.
      */
-    ethUsd: null,
-    gasUsd: null,
+    gasWei,
   });
 
   const connectWallet = useCallback(

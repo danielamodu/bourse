@@ -8,6 +8,8 @@ import { WalletConnect } from "@/components/WalletConnect";
 import { useClock } from "@/hooks/useClock";
 import { useQuote } from "@/hooks/useQuote";
 import { useStockPrices } from "@/hooks/useStockPrices";
+import { useTrade } from "@/hooks/useTrade";
+import { useWallet } from "@/hooks/useWallet";
 import { cx } from "@/lib/cx";
 import {
   formatFeedAge,
@@ -19,15 +21,23 @@ import { STOCK_TOKENS, type StockSymbol } from "@/lib/tokens";
 import styles from "./trade.module.css";
 
 /**
- * One market, with a live quote.
+ * One market, with a live quote and the buy behind it.
  *
  * The reference price at the top and the quote in the panel are two different
  * numbers on purpose. The reference is Chainlink's, publishes on US market hours,
  * and is captioned with its own age. The quote is what a pool will actually
  * charge right now, and it is the one the premium is measured against.
  *
- * Read-only: this asks what a trade would cost. No approval, no signature, no
- * submission, and no wallet is required to see any of it.
+ * Everything above the trade panel needs no wallet, which is the gating rule: the whole
+ * market — price, quote, spread, fee, total, floor — reads with nothing connected, and
+ * the first thing that asks for anything is the panel's own button.
+ *
+ * THE THREE HOOKS ARE CALLED HERE AND NOWHERE BELOW, and the order is the dependency
+ * chain: `useWallet` needs the quote's fee to judge whether the ETH balance is thin,
+ * `useTrade` needs both the quote and the wallet, and each is called exactly once. Two
+ * calls to `useWallet` would mean two sets of balance reads against a rate-limited RPC
+ * that could disagree on screen — the trade panel gates on the same wallet state
+ * `WalletConnect` describes because it is literally the same object.
  */
 
 /**
@@ -53,6 +63,26 @@ export function TradeDetail({ symbol }: { symbol: StockSymbol }) {
     ngn,
     usdToNgnRate: ngnRate,
     referenceUsd: price.usd,
+  });
+
+  /*
+   * The fee in wei, from the quote on screen, and it is the only argument the wallet
+   * hook takes. The low-ETH warning compares a fee against a balance, both in wei, so
+   * no ETH price is involved — which is the whole of what makes it able to fire at all.
+   */
+  const wallet = useWallet({ gasWei: quote.ngnQuote?.quote.gasWei ?? null });
+
+  /*
+   * `quote.ngnQuote?.quote` rather than the naira view: `useTrade` spends USDC base
+   * units and encodes a floor in the token's own units, and neither of those has a
+   * naira figure in it. The naira is the panel's business.
+   */
+  const trade = useTrade({
+    quote: quote.ngnQuote?.quote ?? null,
+    quoteExpired: quote.expired,
+    refreshQuote: quote.refresh,
+    wallet: wallet.state,
+    owner: wallet.address,
   });
 
   return (
@@ -90,9 +120,10 @@ export function TradeDetail({ symbol }: { symbol: StockSymbol }) {
         usdToNgnRate={ngnRate}
         quote={quote}
         referenceAge={age}
+        trade={trade}
       />
 
-      <WalletConnect />
+      <WalletConnect wallet={wallet} />
 
       <dl className={styles.facts}>
         <div className={styles.fact}>

@@ -111,6 +111,28 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Base's block explorer. */
+export const BASESCAN_URL = "https://basescan.org";
+
+/**
+ * Where to read a transaction for yourself.
+ *
+ * Every state the trade panel reaches after a signature carries this link —
+ * pending, confirmed and reverted alike. That is not a convenience: the panel is
+ * telling someone what happened to their money, and a claim about a transaction
+ * with no way to check it is a claim they have to take on our word. A reverted
+ * receipt in particular is a sentence nobody wants to read from an app that will
+ * not show its working.
+ *
+ * `encodeURIComponent` on a hash is the identity function, and it is here anyway.
+ * The hash comes from a wallet rather than from us, and a value interpolated into
+ * a URL that is then rendered as an `href` is exactly the shape that turns into a
+ * different link than the one it looks like.
+ */
+export function basescanTxUrl(hash: string): string {
+  return `${BASESCAN_URL}/tx/${encodeURIComponent(hash)}`;
+}
+
 type Hex = `0x${string}`;
 
 /**

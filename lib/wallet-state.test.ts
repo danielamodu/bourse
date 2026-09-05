@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { BASE_CHAIN_ID } from "@/lib/rpc";
 import {
+  GAS_HEADROOM,
   isUserRejection,
   walletState,
   type ConnectionPhase,
@@ -17,6 +18,15 @@ import {
  * rendered harness.
  */
 
+/**
+ * What a $30 route on Base actually costs: 220,000 gas units at 0.01 gwei.
+ *
+ * Named because the low-ETH cases below are stated as multiples of it. The default
+ * balance above is hundreds of times this, which is the ordinary case — a wallet
+ * with any ETH in it usually has plenty for a two-transaction buy.
+ */
+const GAS_WEI = 2_200_000_000_000n;
+
 /** Connected, on Base, funded — the state every case below departs from. */
 function input(overrides: Partial<WalletInput> = {}): WalletInput {
   return {
@@ -26,8 +36,7 @@ function input(overrides: Partial<WalletInput> = {}): WalletInput {
     ethWei: 2_000_000_000_000_000n, // 0.002 ETH, a few dollars
     usdcUnits: 50_000_000n, // $50
     balancesFailed: false,
-    ethUsd: null,
-    gasUsd: null,
+    gasWei: null,
     ...overrides,
   };
 }
@@ -174,59 +183,56 @@ describe("walletState: funding gaps", () => {
 });
 
 describe("walletState: ready, and the low-ETH warning", () => {
-  it("is ready with no warning when nothing can price the ETH", () => {
-    // Today's wiring: there is no ETH/USD source in the repo, so `ethUsd` is null
-    // and the warning cannot fire. A warning we cannot substantiate would tell
-    // people to add ETH they may already have plenty of.
+  it("is ready with no warning when there is no quote on screen", () => {
+    // `gasWei` is null until a route has been priced, and null is no comparison
+    // rather than a guess. A warning we cannot substantiate would tell people to
+    // add ETH they may already have plenty of.
     expect(walletState(input())).toEqual({ kind: "ready", lowEth: false });
-    expect(walletState(input({ gasUsd: 0.04 }))).toEqual({
+  });
+
+  it("warns when the balance is under two transactions' worth of gas", () => {
+    // The case this exists for: enough ETH for the approval, not enough for the
+    // swap that follows it. Failing at the second signature is the worst outcome
+    // available — the allowance is set, the gas is spent, nothing was bought.
+    expect(
+      walletState(input({ ethWei: GAS_WEI, gasWei: GAS_WEI })),
+    ).toEqual({ kind: "ready", lowEth: true });
+
+    expect(
+      walletState(input({ ethWei: GAS_WEI * 2n - 1n, gasWei: GAS_WEI })),
+    ).toEqual({ kind: "ready", lowEth: true });
+  });
+
+  it("does not warn at or above the headroom", () => {
+    expect(GAS_HEADROOM).toBe(2n);
+
+    expect(
+      walletState(input({ ethWei: GAS_WEI * GAS_HEADROOM, gasWei: GAS_WEI })),
+    ).toEqual({ kind: "ready", lowEth: false });
+
+    // The ordinary case: any real ETH balance dwarfs a Base fee.
+    expect(walletState(input({ gasWei: GAS_WEI }))).toEqual({
       kind: "ready",
       lowEth: false,
     });
   });
 
-  it("warns when the ETH is worth less than the quote's network fee", () => {
-    expect(walletState(input({ ethUsd: 0.01, gasUsd: 0.04 }))).toEqual({
-      kind: "ready",
-      lowEth: true,
-    });
-  });
-
-  it("does not warn at or above the estimate", () => {
-    expect(walletState(input({ ethUsd: 0.04, gasUsd: 0.04 }))).toEqual({
-      kind: "ready",
-      lowEth: false,
-    });
-    expect(walletState(input({ ethUsd: 5, gasUsd: 0.04 }))).toEqual({
-      kind: "ready",
-      lowEth: false,
-    });
-  });
-
-  it("does not warn without a quote to compare against", () => {
-    expect(walletState(input({ ethUsd: 0.01, gasUsd: null }))).toEqual({
-      kind: "ready",
-      lowEth: false,
-    });
-  });
-
-  it("does not warn on figures it cannot use", () => {
-    for (const gasUsd of [0, -0.04, Number.NaN, Number.POSITIVE_INFINITY]) {
-      expect(walletState(input({ ethUsd: 0.01, gasUsd })), String(gasUsd)).toEqual(
-        { kind: "ready", lowEth: false },
-      );
+  it("does not warn on a gas figure it cannot use", () => {
+    // A route that carried no gas estimate, or a nonsense one. The panel already
+    // shows a blank network fee in that case; inventing a warning beside it would
+    // be worse than saying nothing.
+    for (const gasWei of [null, 0n, -1n]) {
+      expect(
+        walletState(input({ ethWei: 1n, gasWei })),
+        String(gasWei),
+      ).toEqual({ kind: "ready", lowEth: false });
     }
-
-    expect(walletState(input({ ethUsd: Number.NaN, gasUsd: 0.04 }))).toEqual({
-      kind: "ready",
-      lowEth: false,
-    });
   });
 
   it("never warns instead of blocking", () => {
     // A zero balance is a block whatever the gas estimate says, so the warning can
     // never stand in for the stronger statement.
-    expect(kindOf({ ethWei: 0n, ethUsd: 0, gasUsd: 0.04 })).toBe("no-eth");
+    expect(kindOf({ ethWei: 0n, gasWei: GAS_WEI })).toBe("no-eth");
   });
 });
 

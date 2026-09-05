@@ -146,7 +146,9 @@ export const MAX_QUOTE_USDC_UNITS = 1_000_000_000_000n;
  * tree-shakes `requestQuote` out of the client build, the `process.env` reference
  * goes with it.
  */
-function clientId(): string {
+export function clientId(): string {
+  // Exported so `lib/build.ts` identifies Bourse the same way on the build call:
+  // the same `x-client-id` header, and the `source` field of the request body.
   return process.env.KYBERSWAP_CLIENT_ID ?? "bourse";
 }
 
@@ -251,6 +253,18 @@ export type Quote = {
   /** Gas the aggregator estimates for this route, in USD. Null when absent. */
   gasUsd: number | null;
   /**
+   * The same estimate in wei: the aggregator's gas units times the gas price it
+   * priced them at. Null when either leg is missing or non-positive.
+   *
+   * Wei as well as dollars, because the two figures answer different questions.
+   * `gasUsd` is for the panel, where every amount is naira and a dollar figure
+   * converts. This one is for the low-ETH check, which compares against a wallet's
+   * ETH balance -- and that comparison needs no price feed at all, so it works in
+   * the case that matters most: someone who bought USDC on an exchange, withdrew it
+   * to Base, and holds no ETH to pay a fee with.
+   */
+  gasWei: bigint | null;
+  /**
    * The router this route executes through. Never null on a quote that exists:
    * a response naming anything but {@link KYBERSWAP_ROUTER_ADDRESS}, or naming
    * nothing, is a `failed` result rather than a quote. The type says so, so that
@@ -274,6 +288,20 @@ export type RequestQuoteOptions = {
   fetchImpl?: typeof fetch;
   /** Injected so expiry is assertable. */
   nowMs?: number;
+  /**
+   * Called with the verbatim `routeSummary` of a route this module approved.
+   *
+   * `POST /route/build` needs that object exactly as KyberSwap sent it, and a
+   * `Quote` deliberately does not carry it: the quote path serialises a `Quote` to
+   * the browser, and the aggregator's own routing data has no business making that
+   * trip. So capture is opt-in, and `lib/build.ts` is the only caller that opts in.
+   * See `requestRoute` there.
+   *
+   * Called only on a `quote` result, which means every guard in `interpret` has
+   * already run against the same body: tokenIn, tokenOut, amountIn and the router
+   * pin. A summary that reaches a caller is one this module stands behind.
+   */
+  onRouteSummary?: (summary: Record<string, unknown>) => void;
 };
 
 /**
@@ -354,7 +382,24 @@ export async function requestQuote(
     return { kind: "failed", detail: `malformed JSON: ${describe(cause)}` };
   }
 
-  return interpret(body, { symbol, usdcIn, tokenAddress, tokenDecimals, nowMs });
+  const result = interpret(body, {
+    symbol,
+    usdcIn,
+    tokenAddress,
+    tokenDecimals,
+    nowMs,
+  });
+
+  // The summary goes on to a caller that asked for it, and only for a route this
+  // module approved. Not part of the quote: it is handed over rather than returned,
+  // so `Quote`, the browser seam and every existing caller stay exactly as they
+  // were. See `onRouteSummary`.
+  if (result.kind === "quote" && options.onRouteSummary !== undefined) {
+    const summary = readRouteSummary(body);
+    if (summary !== null) options.onRouteSummary(summary);
+  }
+
+  return result;
 }
 
 type InterpretContext = {
@@ -379,6 +424,8 @@ type RouteSummary = {
   tokenOut?: unknown;
   amountOut?: unknown;
   amountOutUsd?: unknown;
+  gas?: unknown;
+  gasPrice?: unknown;
   gasUsd?: unknown;
   routerAddress?: unknown;
 };
@@ -529,6 +576,7 @@ function interpret(body: unknown, ctx: InterpretContext): QuoteResult {
         toFiniteNumber(summary.amountOutUsd),
       ),
       gasUsd: toFiniteNumber(summary.gasUsd),
+      gasWei: gasWeiFrom(summary.gas, summary.gasPrice),
       // The echoed value, now known to be the pinned one bar casing. Kept as
       // received so a log line shows what the aggregator actually said.
       routerAddress: echoedRouter,
@@ -536,6 +584,26 @@ function interpret(body: unknown, ctx: InterpretContext): QuoteResult {
       expiresAtMs: ctx.nowMs + QUOTE_TTL_MS,
     },
   };
+}
+
+/**
+ * The verbatim `routeSummary` off a response, or null.
+ *
+ * A read, never a copy or a reshape. `POST /route/build` takes this object back as
+ * the description of the route to encode, legs and all, so handing it a rebuilt
+ * version of what we understood would be asking for calldata for a route we did not
+ * receive. Nothing here inspects it either: `interpret` has already checked every
+ * field this app reads, and the remainder is KyberSwap's own routing data.
+ */
+function readRouteSummary(body: unknown): Record<string, unknown> | null {
+  const envelope = (
+    typeof body === "object" && body !== null ? body : {}
+  ) as Envelope;
+  const raw: unknown = envelope.data?.routeSummary;
+
+  return typeof raw === "object" && raw !== null
+    ? (raw as Record<string, unknown>)
+    : null;
 }
 
 /**
@@ -699,6 +767,8 @@ export type QuoteWire = {
   usdPerShare: number;
   executionCostBps: number | null;
   gasUsd: number | null;
+  /** Wei as a decimal string, or null. Same reason as `usdcIn`: JSON has no bigint. */
+  gasWei: string | null;
   routerAddress: string;
   receivedAtMs: number;
   expiresAtMs: number;
@@ -726,6 +796,7 @@ export function toQuoteWire(result: QuoteResult): QuoteResultWire {
     usdPerShare: quote.usdPerShare,
     executionCostBps: quote.executionCostBps,
     gasUsd: quote.gasUsd,
+    gasWei: quote.gasWei === null ? null : quote.gasWei.toString(),
     routerAddress: quote.routerAddress,
     receivedAtMs: quote.receivedAtMs,
     expiresAtMs: quote.expiresAtMs,
@@ -833,6 +904,9 @@ export function parseQuoteWire(value: unknown): QuoteResult {
       usdPerShare,
       executionCostBps: toFiniteNumber(value.executionCostBps),
       gasUsd: toFiniteNumber(value.gasUsd),
+      // Absent, unreadable or zero all arrive as null, and null switches the
+      // low-ETH warning off rather than guessing at a fee.
+      gasWei: toBigInt(value.gasWei),
       routerAddress,
       receivedAtMs,
       expiresAtMs,
@@ -864,15 +938,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * EIP-55 checksum casing is cosmetic, and the aggregator is under no obligation
  * to echo an address back in the casing we sent, so comparing the strings as
  * given would reject valid responses.
+ *
+ * Exported for `lib/build.ts`, which checks the build response's `routerAddress`
+ * against the same pin. One comparison for one question: a second implementation
+ * of it is a second chance to get case handling wrong at the boundary where the
+ * answer decides who may spend a user's USDC.
  */
-function sameAddress(value: unknown, expected: string): boolean {
+export function sameAddress(value: unknown, expected: string): boolean {
   return (
     typeof value === "string" && value.toLowerCase() === expected.toLowerCase()
   );
 }
 
 /** Base-10 integer strings only — these are token amounts, never hex, never floats. */
-function toBigInt(value: unknown): bigint | null {
+export function toBigInt(value: unknown): bigint | null {
+  // Exported for `lib/build.ts`. The build response states `amountIn`, `amountOut`
+  // and `gas` in this same dialect, and two subtly different parsers at one wire
+  // boundary is exactly the drift worth not having: these are exact amounts a
+  // wallet will move, so what counts as readable has to be one rule.
   if (typeof value === "bigint") return value;
   if (typeof value === "number") {
     return Number.isSafeInteger(value) ? BigInt(value) : null;
@@ -889,13 +972,34 @@ function toBigInt(value: unknown): bigint | null {
   }
 }
 
-/** Numbers, or numeric strings — the aggregator sends USD figures as strings. */
+/** Numbers, or numeric strings -- the aggregator sends USD figures as strings. */
 function toFiniteNumber(value: unknown): number | null {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value !== "string" || value.trim() === "") return null;
 
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * The route's fee in wei: gas units times the gas price they were priced at.
+ *
+ * Both legs come off `routeSummary` as decimal strings, and both must read as
+ * positive integers or there is no product worth having. Null rather than zero on
+ * anything else, because zero would be a claim that the trade is free, and the one
+ * consumer of this figure warns a user about their ETH balance from it.
+ *
+ * Not USD. `gasUsd` sits beside it for the panel; this exists so the low-ETH check
+ * can compare like with like against a wallet balance without an ETH price.
+ */
+function gasWeiFrom(gas: unknown, gasPrice: unknown): bigint | null {
+  const units = toBigInt(gas);
+  const price = toBigInt(gasPrice);
+
+  if (units === null || price === null) return null;
+  if (units <= 0n || price <= 0n) return null;
+
+  return units * price;
 }
 
 function describe(error: unknown): string {

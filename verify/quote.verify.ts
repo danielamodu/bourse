@@ -68,6 +68,14 @@ const MAPPED_FIELDS: ReadonlyArray<readonly [string, string]> = [
   ["amountInUsd", "the market spread goes blank, and no buy affordance renders"],
   ["amountOutUsd", "the market spread goes blank, and no buy affordance renders"],
   ["gasUsd", "estimated gas goes blank, which CLAUDE.md requires visible"],
+  [
+    "gas",
+    "the fee in wei cannot be derived, so the low-ETH warning goes quiet for someone with no ETH",
+  ],
+  [
+    "gasPrice",
+    "same: no gas price, no fee in wei, and no warning before a failed signature",
+  ],
 ];
 
 /** Parses the envelope, printing whatever came back if it is not JSON. */

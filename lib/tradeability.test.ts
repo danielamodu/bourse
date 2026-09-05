@@ -42,6 +42,7 @@ function quoteResult(overrides: Partial<Quote> = {}): QuoteResult {
       usdPerShare: 600,
       executionCostBps: 20,
       gasUsd: 0.004,
+      gasWei: 2_200_000_000_000n,
       // The pin, because `Quote.routerAddress` is not nullable: a route through
       // any other router never becomes a `Quote` at all.
       routerAddress: KYBERSWAP_ROUTER_ADDRESS,
