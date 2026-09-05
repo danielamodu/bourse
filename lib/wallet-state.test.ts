@@ -4,6 +4,7 @@ import { BASE_CHAIN_ID } from "@/lib/rpc";
 import {
   GAS_HEADROOM,
   isUserRejection,
+  LOW_ETH_FLOOR_WEI,
   walletState,
   type ConnectionPhase,
   type WalletInput,
@@ -21,11 +22,22 @@ import {
 /**
  * What a $30 route on Base actually costs: 220,000 gas units at 0.01 gwei.
  *
- * Named because the low-ETH cases below are stated as multiples of it. The default
- * balance above is hundreds of times this, which is the ordinary case — a wallet
- * with any ETH in it usually has plenty for a two-transaction buy.
+ * Named because the low-ETH cases below are stated as multiples of it. Four of these
+ * is about two cents, which is the whole reason {@link LOW_ETH_FLOOR_WEI} exists: a
+ * threshold built only out of this figure never fires for anyone.
  */
 const GAS_WEI = 2_200_000_000_000n;
+
+/**
+ * The same route at a gasPrice forty-odd times higher: 220,000 gas at about
+ * 0.45 gwei.
+ *
+ * Base under load, when the L1 calldata component moves the fee rather than nudging
+ * it. Chosen so that four of these clears the floor, because that is the only way to
+ * exercise the other arm of the maximum — and it is the arm that matters on the day
+ * fees rise between the approval and the swap.
+ */
+const HIGH_GAS_WEI = 100_000_000_000_000n;
 
 /** Connected, on Base, funded — the state every case below departs from. */
 function input(overrides: Partial<WalletInput> = {}): WalletInput {
@@ -33,7 +45,7 @@ function input(overrides: Partial<WalletInput> = {}): WalletInput {
     hasConnector: true,
     phase: "connected",
     chainId: BASE_CHAIN_ID,
-    ethWei: 2_000_000_000_000_000n, // 0.002 ETH, a few dollars
+    ethWei: 2_000_000_000_000_000n, // 0.002 ETH, several times the floor
     usdcUnits: 50_000_000n, // $50
     balancesFailed: false,
     gasWei: null,
@@ -183,56 +195,86 @@ describe("walletState: funding gaps", () => {
 });
 
 describe("walletState: ready, and the low-ETH warning", () => {
-  it("is ready with no warning when there is no quote on screen", () => {
-    // `gasWei` is null until a route has been priced, and null is no comparison
-    // rather than a guess. A warning we cannot substantiate would tell people to
-    // add ETH they may already have plenty of.
+  it("says nothing about a balance that clears both terms", () => {
+    // The ordinary case, with a quote on screen and without one.
     expect(walletState(input())).toEqual({ kind: "ready", lowEth: false });
-  });
 
-  it("warns when the balance is under two transactions' worth of gas", () => {
-    // The case this exists for: enough ETH for the approval, not enough for the
-    // swap that follows it. Failing at the second signature is the worst outcome
-    // available — the allowance is set, the gas is spent, nothing was bought.
-    expect(
-      walletState(input({ ethWei: GAS_WEI, gasWei: GAS_WEI })),
-    ).toEqual({ kind: "ready", lowEth: true });
-
-    expect(
-      walletState(input({ ethWei: GAS_WEI * 2n - 1n, gasWei: GAS_WEI })),
-    ).toEqual({ kind: "ready", lowEth: true });
-  });
-
-  it("does not warn at or above the headroom", () => {
-    expect(GAS_HEADROOM).toBe(2n);
-
-    expect(
-      walletState(input({ ethWei: GAS_WEI * GAS_HEADROOM, gasWei: GAS_WEI })),
-    ).toEqual({ kind: "ready", lowEth: false });
-
-    // The ordinary case: any real ETH balance dwarfs a Base fee.
     expect(walletState(input({ gasWei: GAS_WEI }))).toEqual({
       kind: "ready",
       lowEth: false,
     });
   });
 
-  it("does not warn on a gas figure it cannot use", () => {
-    // A route that carried no gas estimate, or a nonsense one. The panel already
-    // shows a blank network fee in that case; inventing a warning beside it would
-    // be worse than saying nothing.
+  it("warns below the floor, where the quoted fee decides nothing", () => {
+    // Why the floor exists, and the bug it fixes. `gasWei` is priced at Base's
+    // gasPrice floor, so four times it is about two cents — and a threshold of two
+    // cents stays silent for exactly the person the warning is written for.
+    expect(GAS_WEI * GAS_HEADROOM).toBeLessThan(LOW_ETH_FLOOR_WEI);
+
+    expect(
+      walletState(input({ ethWei: LOW_ETH_FLOOR_WEI - 1n, gasWei: GAS_WEI })),
+    ).toEqual({ kind: "ready", lowEth: true });
+
+    // Fifty times the quoted fee, and still worth a sentence: a buy is two
+    // signatures, and Base fees move with L1 calldata prices between them.
+    expect(
+      walletState(input({ ethWei: GAS_WEI * 50n, gasWei: GAS_WEI })),
+    ).toEqual({ kind: "ready", lowEth: true });
+  });
+
+  it("stops warning at the floor exactly", () => {
+    // Pinned, because the number is the whole of the fix: 0.0003 ETH in wei.
+    expect(LOW_ETH_FLOOR_WEI).toBe(300_000_000_000_000n);
+
+    expect(
+      walletState(input({ ethWei: LOW_ETH_FLOOR_WEI, gasWei: GAS_WEI })),
+    ).toEqual({ kind: "ready", lowEth: false });
+  });
+
+  it("warns above the floor when the route itself is expensive", () => {
+    // The other arm of the maximum, and why the multiple is still in the rule.
+    const headroom = HIGH_GAS_WEI * GAS_HEADROOM;
+
+    expect(GAS_HEADROOM).toBe(4n);
+    expect(headroom).toBeGreaterThan(LOW_ETH_FLOOR_WEI);
+
+    expect(
+      walletState(input({ ethWei: LOW_ETH_FLOOR_WEI, gasWei: HIGH_GAS_WEI })),
+    ).toEqual({ kind: "ready", lowEth: true });
+
+    expect(
+      walletState(input({ ethWei: headroom - 1n, gasWei: HIGH_GAS_WEI })),
+    ).toEqual({ kind: "ready", lowEth: true });
+
+    expect(
+      walletState(input({ ethWei: headroom, gasWei: HIGH_GAS_WEI })),
+    ).toEqual({ kind: "ready", lowEth: false });
+  });
+
+  it("still applies the floor when the gas figure is unusable", () => {
+    // The contract this deliberately changed. A route that carried no gas estimate
+    // used to silence the warning outright, which silenced it hardest for the
+    // emptiest wallets. The floor needs no quote to be true, and a missing estimate
+    // is not evidence that a wallet is funded.
     for (const gasWei of [null, 0n, -1n]) {
       expect(
         walletState(input({ ethWei: 1n, gasWei })),
+        String(gasWei),
+      ).toEqual({ kind: "ready", lowEth: true });
+
+      expect(
+        walletState(input({ ethWei: LOW_ETH_FLOOR_WEI, gasWei })),
         String(gasWei),
       ).toEqual({ kind: "ready", lowEth: false });
     }
   });
 
-  it("never warns instead of blocking", () => {
-    // A zero balance is a block whatever the gas estimate says, so the warning can
-    // never stand in for the stronger statement.
+  it("never warns instead of blocking, or blocks instead of warning", () => {
+    // A zero balance is a block whatever the gas estimate says, and no threshold
+    // above zero may refuse a trade that would have gone through: one wei against
+    // the most expensive route here is still a warning.
     expect(kindOf({ ethWei: 0n, gasWei: GAS_WEI })).toBe("no-eth");
+    expect(kindOf({ ethWei: 1n, gasWei: HIGH_GAS_WEI })).toBe("ready");
   });
 });
 

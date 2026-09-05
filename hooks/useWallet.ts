@@ -44,11 +44,13 @@ import {
 export type UseWalletInput = {
   /**
    * The current quote's estimated fee in wei, from `Quote.gasWei`. Null with no
-   * quote on screen, which switches the low-ETH warning off.
+   * quote on screen, which leaves the low-ETH warning on its absolute floor
+   * rather than switching it off — see `LOW_ETH_FLOOR_WEI` in
+   * `lib/wallet-state.ts`.
    *
-   * The whole reason the hook takes an argument at all. The warning compares a fee
-   * against a balance, so it needs the fee, and the fee belongs to the quote rather
-   * than to the wallet.
+   * The reason the hook takes an argument at all is that an expensive route has
+   * to be able to raise the threshold above that floor, and the fee belongs to
+   * the quote rather than to the wallet, so it can only arrive from outside.
    */
   gasWei?: bigint | null;
 };

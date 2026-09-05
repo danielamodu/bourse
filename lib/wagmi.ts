@@ -7,8 +7,26 @@ import { coinbaseWallet, injected } from "wagmi/connectors";
  * token, feed and pool this app touches lives on Base.
  */
 
-/** `||` rather than `??` so an empty string in the environment still falls back. */
-const rpcUrl = process.env.NEXT_PUBLIC_BASE_RPC_URL || "https://mainnet.base.org";
+/**
+ * The browser's endpoint, and it is the public one on purpose.
+ *
+ * DO NOT POINT THIS AT `BASE_RPC_URL`, AND DO NOT ADD A `NEXT_PUBLIC_` COPY OF IT
+ * TO REACH IT FROM HERE. The two sides read differently:
+ *
+ * - Server reads concentrate. Every visitor to `/markets` is served by the same
+ *   Vercel instance from the same address, so thirteen feed reads times everyone
+ *   arrive at one endpoint as one caller. That is the rate limit `BASE_RPC_URL`
+ *   exists to get out from under — see `dedicatedRpcUrl` in `lib/rpc.ts`.
+ * - These reads do not. A balance and an allowance per person, issued from that
+ *   person's own browser and their own IP, spread across as many callers as there
+ *   are users.
+ *
+ * So a key in front of this buys nothing worth having, and the only way to ship one
+ * to a browser is `NEXT_PUBLIC_`, which inlines it into JavaScript anyone can read.
+ * It would be scraped and burned through by strangers, and we would be paying for
+ * their traffic to make a handful of per-user reads marginally faster.
+ */
+const rpcUrl = "https://mainnet.base.org";
 
 export const config = createConfig({
   chains: [base],

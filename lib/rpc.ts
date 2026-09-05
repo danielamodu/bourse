@@ -5,12 +5,14 @@ import { createPublicClient, fallback, http, type Chain } from "viem";
  *
  * `mainnet.base.org` starts returning `over rate limit` after roughly a dozen
  * `eth_call`s in quick succession, and the markets grid needs a feed read and a
- * `decimals()` per token — 26 calls if issued naively. Two defences:
+ * `decimals()` per token — 26 calls if issued naively. Three defences:
  *
  * 1. Batch. Every grid read goes through Multicall3 as a single `eth_call`, so
  *    26 reads cost one request. `lib/read-prices.ts` does this.
  * 2. Rotate. Requests start from a different public endpoint each time and fall
  *    through to the others on failure, so no single endpoint carries the load.
+ * 3. And a dedicated endpoint in front of both, when the deployment has one —
+ *    `BASE_RPC_URL`, server-only, see {@link dedicatedRpcUrl}.
  *
  * Anything that genuinely cannot be batched — hand-verifying four addresses, for
  * instance — uses `ethCall` one at a time with `sleep` in between.
@@ -43,7 +45,10 @@ export const BASE_CHAIN_ID = 8453;
 export const MULTICALL3_ADDRESS =
   "0xcA11bde05977b3631167028862bE2a173976CA11" as const;
 
-/** Public Base endpoints, used in rotation. */
+/**
+ * Public Base endpoints, used in rotation and as the fallbacks behind a
+ * dedicated one.
+ */
 export const BASE_RPC_URLS = [
   "https://mainnet.base.org",
   "https://base-rpc.publicnode.com",
@@ -74,10 +79,49 @@ const REQUEST_TIMEOUT_MS = 12_000;
 let rotation = 0;
 
 /**
- * The endpoint list, rotated one position per call.
+ * The dedicated endpoint for server-side reads, from `BASE_RPC_URL`.
  *
- * A dedicated endpoint in `NEXT_PUBLIC_BASE_RPC_URL` always goes first — it has
- * the headroom the public ones do not, and the public list stays as fallback.
+ * SERVER-ONLY, AND NEVER `NEXT_PUBLIC_`. A provider's endpoint carries its key in
+ * the URL, and a `NEXT_PUBLIC_` variable is inlined into the JavaScript every
+ * visitor downloads — which is to say published, scraped, and spent by strangers
+ * inside a day. Next substitutes `undefined` for a non-public variable in a client
+ * bundle, and that is exactly the behaviour wanted here: the browser falls back to
+ * the public list, and `lib/wagmi.ts` is on public endpoints deliberately for the
+ * same reason. The comment there explains why that is not a gap to close.
+ *
+ * What it is for is the concentration server reads have and browser reads do not.
+ * Every visitor to `/markets` is read for by the same Vercel instance from the same
+ * address, so thirteen feeds times everyone arrives at one endpoint as one caller.
+ *
+ * Unset, empty and whitespace all read as absent, so a variable someone created
+ * and never filled in degrades to the public list rather than pointing viem at "".
+ */
+export function dedicatedRpcUrl(): string | null {
+  const url = process.env.BASE_RPC_URL?.trim();
+  return url === undefined || url === "" ? null : url;
+}
+
+/**
+ * Every endpoint a server read may use, best first.
+ *
+ * The dedicated one leads and the three public ones follow it as fallbacks, so the
+ * endpoint with headroom takes the traffic and an outage on it still answers. Used
+ * where a caller wants the whole list rather than one read's worth of it —
+ * `verify:chain` walks it so that the live checks exercise the endpoint the
+ * deployment actually reads through.
+ */
+export function baseRpcUrls(): string[] {
+  const dedicated = dedicatedRpcUrl();
+  return dedicated === null ? [...BASE_RPC_URLS] : [dedicated, ...BASE_RPC_URLS];
+}
+
+/**
+ * The endpoint list for one read, with the public three rotated a position per
+ * call.
+ *
+ * `BASE_RPC_URL` always leads when it is set, because it is the one with the
+ * headroom. The public endpoints rotate behind it so that when it is absent — or
+ * present and failing — no single free endpoint carries every request.
  */
 export function rotatedRpcUrls(): string[] {
   const offset = rotation++ % BASE_RPC_URLS.length;
@@ -86,8 +130,8 @@ export function rotatedRpcUrls(): string[] {
     ...BASE_RPC_URLS.slice(0, offset),
   ];
 
-  const dedicated = process.env.NEXT_PUBLIC_BASE_RPC_URL;
-  return dedicated ? [dedicated, ...rotated] : rotated;
+  const dedicated = dedicatedRpcUrl();
+  return dedicated === null ? rotated : [dedicated, ...rotated];
 }
 
 /**

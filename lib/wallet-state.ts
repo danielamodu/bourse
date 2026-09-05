@@ -80,8 +80,9 @@ export type WalletState =
   /** ETH but no USDC, so there is nothing to spend. Blocking. */
   | { kind: "no-usdc" }
   /**
-   * Funded and on Base. `lowEth` is a warning, never a block — there is not much
-   * more ETH here than one transaction's fee, and a buy is two of them.
+   * Funded and on Base. `lowEth` is a warning, never a block — the balance is
+   * under {@link LOW_ETH_FLOOR_WEI}, or under what this quote's two signatures
+   * look likely to cost, and a buy is two of them.
    */
   | { kind: "ready"; lowEth: boolean };
 
@@ -111,7 +112,8 @@ export type WalletState =
  * blocks; anything above zero is `ready`. Measured gas on these routes is three to
  * five cents, so a wallet with any ETH in it almost certainly has enough, and a
  * threshold set higher would refuse trades that would have gone through. Thin
- * against the quote's own estimate it warns instead — see {@link isLowEth}.
+ * against {@link LOW_ETH_FLOOR_WEI} or the quote's own estimate it warns instead —
+ * see {@link isLowEth}.
  */
 export function walletState({
   hasConnector,
@@ -158,36 +160,71 @@ export function walletState({
 }
 
 /**
- * How many transactions' worth of gas a wallet should hold before we stop warning.
+ * How many of the quote's own estimated fees a wallet should hold before we stop
+ * warning.
  *
- * Two, because a buy is two transactions: an approval and a swap. A wallet holding
- * exactly one fee's worth gets through the approval and then fails at the second
- * signature, which is the worst place to run out — the allowance is set, the gas is
- * spent, and nothing was bought.
+ * Four: two transactions, doubled. A buy is an approval and a swap, so a wallet
+ * holding exactly one fee's worth gets through the approval and then fails at the
+ * second signature — the worst place to run out, because the allowance is set, the
+ * gas is spent and nothing was bought. The doubling is margin: the figure being
+ * multiplied is a `gasPrice` snapshot from when the route was quoted, and Base fees
+ * move with L1 calldata prices between one signature and the next.
  *
- * It is a floor with margin rather than a precise figure. Base fees move with L1
- * calldata prices and can rise between the two signatures, and the estimate itself
- * is the aggregator's.
+ * A multiple of that estimate is not enough on its own. See
+ * {@link LOW_ETH_FLOOR_WEI}, which is the term that decides this in practice.
  */
-export const GAS_HEADROOM = 2n;
+export const GAS_HEADROOM = 4n;
 
 /**
- * Whether the ETH balance is thin against what this quote's two transactions cost.
+ * The absolute floor the warning uses, in wei. 0.0003 ETH.
  *
- * A warning, not a gate: {@link walletState} only blocks on a genuinely zero
- * balance. Both sides are wei, so no ETH price is involved and the comparison holds
- * in the case that matters — someone who bought USDC on an exchange, withdrew it to
- * Base and has never held any ETH. Before this was in wei it compared two USD
- * figures that nothing in the app could supply, so it never fired at all.
+ * This is the half of the threshold that does the work, because the other half
+ * collapses. `gasWei` is `gas * gasPrice` at quote time, and Base's gasPrice
+ * sits near its floor — around 0.006 gwei — so one of these routes costs on
+ * the order of 1e12 wei. Four times a couple of cents is still a couple of
+ * cents, and a wallet holding two cents of ETH is exactly who the warning is
+ * for: a threshold built only out of the estimate stays silent for precisely
+ * the person it was written for.
  *
- * No quote, or no usable gas figure on the route, is no warning: null and
- * non-positive both mean there is nothing to compare, and a warning we cannot
- * substantiate would tell people to add ETH they may already have plenty of.
+ * 0.0003 ETH is a dollar or two. Small enough that warning below it cannot
+ * cost anyone a trade — nothing here blocks, {@link walletState} blocks only
+ * on a genuinely zero balance — and large enough to still mean something when
+ * calldata prices spike between the approval and the swap, which is when a fee
+ * multiplies rather than nudges.
+ *
+ * Named and in wei on purpose. Inline it is fifteen digits nobody can check at
+ * a glance, and in ETH it would need a price to compare against a balance —
+ * which is the bug this comparison was moved into wei to escape.
+ */
+export const LOW_ETH_FLOOR_WEI = 300_000_000_000_000n;
+
+/**
+ * Whether the ETH balance is thin against what a buy from here would cost.
+ *
+ * A warning, not a gate: {@link walletState} blocks only on a genuinely zero
+ * balance. Both sides are wei, so no ETH price is involved and the comparison
+ * holds in the case that matters — someone who bought USDC on an exchange,
+ * withdrew it to Base and has never held any ETH. Before this was in wei it
+ * compared two USD figures that nothing in the app could supply, so it never
+ * fired at all.
+ *
+ * THE GREATER OF THE TWO TERMS WINS. {@link GAS_HEADROOM} times the quote's own
+ * estimate is what responds to a genuinely expensive route;
+ * {@link LOW_ETH_FLOOR_WEI} is what responds at all, because on a calm day the
+ * first term is a couple of cents and no real wallet falls below it.
+ *
+ * A missing or non-positive `gasWei` is no longer no warning. That was right
+ * while the whole threshold was a multiple of the estimate — nothing to multiply
+ * meant nothing to say — but the floor needs no quote to be true, and a route
+ * that came back without a usable gas figure is not evidence that the wallet is
+ * funded. The absent term drops out of the maximum and the floor still applies,
+ * which is also what keeps this honest before the first quote lands.
  */
 function isLowEth(ethWei: bigint, gasWei: bigint | null): boolean {
-  if (gasWei === null || gasWei <= 0n) return false;
+  const quoted = gasWei !== null && gasWei > 0n ? gasWei * GAS_HEADROOM : 0n;
+  const threshold = quoted > LOW_ETH_FLOOR_WEI ? quoted : LOW_ETH_FLOOR_WEI;
 
-  return ethWei < gasWei * GAS_HEADROOM;
+  return ethWei < threshold;
 }
 
 /** EIP-1193's rejection code, and the string some injected wallets send instead. */

@@ -19,6 +19,11 @@ import { defineConfig } from "vitest/config";
  * Each script names its file so that verifying an address does not fire live
  * aggregator requests, and vice versa.
  *
+ * `verify/env.ts` loads `.env` first. Vitest does not, and a live check that reads
+ * through a public endpoint while the deployment reads through `BASE_RPC_URL` is
+ * checking something nobody ships. `vitest.config.ts` has no such setup file, on
+ * purpose: `npm test` must not acquire an opinion about a local environment.
+ *
  * The timeout is generous because a chain read may fall through three endpoints,
  * each with its own 12s request timeout and a delay in front of it.
  */
@@ -31,6 +36,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["verify/**/*.verify.ts"],
+    setupFiles: ["verify/env.ts"],
     testTimeout: 45_000,
   },
 });

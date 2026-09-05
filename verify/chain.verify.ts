@@ -4,9 +4,9 @@ import { describe, expect, it } from "vitest";
 import { isValidTokenAddress } from "@/lib/address";
 import { KYBERSWAP_ROUTER_ADDRESS } from "@/lib/quote";
 import {
-  BASE_RPC_URLS,
   MULTICALL3_ADDRESS,
   READ_DELAY_MS,
+  baseRpcUrls,
   ethCall,
   ethGetCode,
   sleep,
@@ -57,7 +57,9 @@ import {
  *
  * Reads are serialised with a delay and rotate across endpoints, because
  * `mainnet.base.org` rate-limits after roughly a dozen calls in quick
- * succession and this file makes about thirty-five.
+ * succession and this file makes about thirty-five. `BASE_RPC_URL` joins that
+ * rotation when it is set — `verify/env.ts` loads `.env`, so a run reports on the
+ * endpoint the deployment reads through rather than only on the public three.
  */
 
 /** `symbol()`. */
@@ -121,9 +123,24 @@ function decodeDecimals(data: `0x${string}`): number {
 let callCount = 0;
 
 /**
+ * Every endpoint available, dedicated first — `verify/env.ts` has loaded `.env` by
+ * the time this runs, so `BASE_RPC_URL` is in the list when the deployment has one.
+ *
+ * Read once: the list cannot change mid-run, and rotating over a fixed array is
+ * what lets the counter below hand each endpoint a share of the reads.
+ */
+const ENDPOINTS = baseRpcUrls();
+
+/**
  * Runs one read, starting from a different endpoint each time and falling
  * through the rest only if that one fails. The delay goes before every attempt,
  * including retries, so a rate-limited endpoint is not immediately hammered.
+ *
+ * ROTATED RATHER THAN DEDICATED-FIRST, which is where this deliberately differs
+ * from `rotatedRpcUrls`. The app wants its best endpoint every time; a verify run
+ * wants to know that all of them answer, and pinning the first one would mean a
+ * dead public fallback passed silently until the day it was needed. Every failure
+ * and every answering URL is named in the output.
  */
 async function fromAnyEndpoint<T>(
   label: string,
@@ -132,8 +149,8 @@ async function fromAnyEndpoint<T>(
   const start = callCount++;
   const failures: string[] = [];
 
-  for (let offset = 0; offset < BASE_RPC_URLS.length; offset += 1) {
-    const url = BASE_RPC_URLS[(start + offset) % BASE_RPC_URLS.length];
+  for (let offset = 0; offset < ENDPOINTS.length; offset += 1) {
+    const url = ENDPOINTS[(start + offset) % ENDPOINTS.length];
     if (url === undefined) continue;
 
     await sleep(READ_DELAY_MS);

@@ -74,10 +74,16 @@ export function WalletConnect({ wallet }: WalletConnectProps) {
         {explain(state, address)}
       </p>
 
+      {/* Renders with a quote on screen or without one. The threshold has an
+          absolute floor in it — see `LOW_ETH_FLOOR_WEI` — so this can be true before
+          any route has been priced, which is why the copy names no fee and no
+          figure. It is a warning and never a gate: the buy button is not disabled by
+          it, because a balance this size usually does complete both transactions. */}
       {state.kind === "ready" && state.lowEth ? (
         <p className={cx(styles.body, styles.notice)}>
-          Your ETH is worth less than the network fee this quote estimates. A little
-          more would make the trade safe to send.
+          The ETH in this wallet is low. A buy is two transactions — an approval,
+          then the purchase — and there is not much room here for the second one if
+          fees rise between them. A little more ETH avoids that.
         </p>
       ) : null}
 
@@ -221,7 +227,15 @@ function explain(state: WalletState, address: string | null): string {
         "This wallet has enough ETH for network fees, but the money that buys " +
         "shares is USDC and there is none here yet. Add some and check again."
       );
-    case "ready":
-      return `Connected as ${formatAddressShort(address)}, on Base, with enough for network fees.`;
+    case "ready": {
+      const connected = `Connected as ${formatAddressShort(address)}, on Base`;
+
+      // The fee clause is dropped when `lowEth` is set. The notice above this
+      // paragraph is where a thin balance gets explained, and this sentence must not
+      // say the fees are covered while that one says they may not be.
+      return state.lowEth
+        ? `${connected}.`
+        : `${connected}, with enough for network fees.`;
+    }
   }
 }
