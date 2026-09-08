@@ -32,7 +32,7 @@ const BLOCKING: WalletState[] = [
   { kind: "balances-unreadable" },
   { kind: "checking" },
   { kind: "no-eth" },
-  { kind: "no-usdc" },
+  { kind: "no-usdc", lowEth: false },
 ];
 
 /** $30 in, approved, quoted, nothing in flight — what each case departs from. */

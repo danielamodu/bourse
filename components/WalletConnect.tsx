@@ -223,10 +223,16 @@ function explain(state: WalletState, address: string | null): string {
         "choose Base as the network when you withdraw."
       );
     case "no-usdc":
-      return (
-        "This wallet has enough ETH for network fees, but the money that buys " +
-        "shares is USDC and there is none here yet. Add some and check again."
-      );
+      // The fee clause is the same `lowEth` signal the `ready` branch reads.
+      // This state is reached at any ETH balance above zero, so asserting the
+      // fees are covered would be false for a wallet holding a wei. When the
+      // balance is thin the sentence says so and names both top-ups; only a
+      // balance that clears the threshold keeps the sufficiency claim.
+      return state.lowEth
+        ? "This wallet is low on ETH for network fees, and the money that buys " +
+          "shares is USDC and there is none here yet. Add both and check again."
+        : "This wallet has enough ETH for network fees, but the money that buys " +
+          "shares is USDC and there is none here yet. Add some and check again.";
     case "ready": {
       const connected = `Connected as ${formatAddressShort(address)}, on Base`;
 

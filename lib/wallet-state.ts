@@ -77,8 +77,15 @@ export type WalletState =
   | { kind: "checking" }
   /** No ETH at all, so no transaction can be paid for. Blocking. */
   | { kind: "no-eth" }
-  /** ETH but no USDC, so there is nothing to spend. Blocking. */
-  | { kind: "no-usdc" }
+  /**
+   * ETH but no USDC, so there is nothing to spend. Blocking.
+   *
+   * Carries the same `lowEth` warning as `ready`, from the same rule: this
+   * state is reached at any ETH balance above zero, so asserting the fees are
+   * covered here would be false for a wallet holding a wei. The panel reuses
+   * the signal rather than repeating the claim.
+   */
+  | { kind: "no-usdc"; lowEth: boolean }
   /**
    * Funded and on Base. `lowEth` is a warning, never a block — the balance is
    * under {@link LOW_ETH_FLOOR_WEI}, or under what this quote's two signatures
@@ -154,7 +161,7 @@ export function walletState({
   // `<= 0n` rather than `=== 0n`: a chain read cannot return a negative balance,
   // and this way a stubbed or malformed one cannot slip past as funded.
   if (ethWei <= 0n) return { kind: "no-eth" };
-  if (usdcUnits <= 0n) return { kind: "no-usdc" };
+  if (usdcUnits <= 0n) return { kind: "no-usdc", lowEth: isLowEth(ethWei, gasWei) };
 
   return { kind: "ready", lowEth: isLowEth(ethWei, gasWei) };
 }

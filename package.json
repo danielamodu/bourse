@@ -12,7 +12,8 @@
     "verify": "vitest run --config vitest.verify.config.ts",
     "verify:build": "vitest run --config vitest.verify.config.ts verify/build.verify.ts",
     "verify:chain": "vitest run --config vitest.verify.config.ts verify/chain.verify.ts",
-    "verify:quote": "vitest run --config vitest.verify.config.ts verify/quote.verify.ts"
+    "verify:quote": "vitest run --config vitest.verify.config.ts verify/quote.verify.ts",
+    "verify:simulate": "vitest run --config vitest.verify.config.ts verify/simulate.verify.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.0",
