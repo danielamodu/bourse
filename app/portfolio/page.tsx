@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import { ArrowRight, ChevronRight, Sparkles } from "lucide-react";
 
 import { AppShell } from "@/components/AppShell";
@@ -33,6 +35,27 @@ export default function PortfolioPage() {
     wallet.address,
   );
   const { prices, ngnRate } = useStockPrices();
+  const router = useRouter();
+  const [graceExpired, setGraceExpired] = useState(false);
+
+  // The dashboard is not public: a settled-disconnected visitor belongs on
+  // sign-in. The grace period plus the settled-state check exist so a wallet
+  // still silently reconnecting is never bounced mid-handshake — only
+  // `disconnected` and `no-wallet` redirect, never `connecting` or
+  // `checking`, however long they take.
+  useEffect(() => {
+    const timer = setTimeout(() => setGraceExpired(true), 1500);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const gatedOut =
+    graceExpired &&
+    (wallet.state.kind === "disconnected" ||
+      wallet.state.kind === "no-wallet");
+
+  useEffect(() => {
+    if (gatedOut) router.replace("/login");
+  }, [gatedOut, router]);
 
   const holdings = QUOTABLE_SYMBOLS.map((symbol) => {
     const units = balances[symbol];
@@ -82,13 +105,14 @@ export default function PortfolioPage() {
       </div>
 
       {!connected ? (
-        <div className="empty-state">
-          <h3>Connect to see your portfolio</h3>
-          <p>Your holdings live in your wallet, not here.</p>
-          <p style={{ marginTop: 18 }}>
-            <Link href="/login" className="button button-dark">
-              Connect wallet <ArrowRight size={15} />
-            </Link>
+        <div className="empty-state" aria-busy={!gatedOut}>
+          <h3>
+            {gatedOut ? "Taking you to sign in" : "Checking your wallet"}
+          </h3>
+          <p>
+            {gatedOut
+              ? "Holdings live behind sign-in."
+              : "This usually takes a few seconds."}
           </p>
         </div>
       ) : balancesLoading && holdings.length === 0 ? (

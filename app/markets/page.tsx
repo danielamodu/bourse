@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 
 import { AppShell } from "@/components/AppShell";
+import { MarketsGateLoader } from "@/components/MarketsGateLoader";
 import { STOCK_SYMBOLS } from "@/lib/tokens";
 
 import { probeCachedTradeability, readCachedPrices } from "./markets-data";
@@ -11,9 +12,10 @@ import { MarketsGrid } from "./MarketsGrid";
  *
  * A server component: the 13 reference prices are read here, in one batched
  * `eth_call`, and tradeability is probed per token, so the page arrives with
- * its numbers already in the HTML and ships no wallet SDK. Browseable with no
- * wallet connected — nothing on this page reads an account and there is no
- * connect gate. Gating happens at the moment of action, in the trade flow.
+ * its numbers already in the HTML and ships no wallet SDK on first paint.
+ * This route is the dashboard and is gated: `MarketsGate` bounces settled
+ * visitors without a wallet to sign-in, while connected wallets never notice
+ * it. Gating inside the trade flow stays as the second line.
  *
  * Rendered per request, not prerendered. Nothing here reads a header or a
  * cookie, so Next would otherwise treat the route as static and bake one feed
@@ -33,6 +35,7 @@ export default function MarketsPage() {
   // to connect rather than showing one.
   return (
     <AppShell walletAddress={null}>
+      <MarketsGateLoader />
       <div className="page-header">
         <div>
           <div className="eyebrow">MARKETS</div>
