@@ -61,6 +61,17 @@ export type UseWalletResult = {
   /** The connected address, for display. Null when there is no connection. */
   address: string | null;
   /**
+   * Native ETH balance in wei, for fee-against-balance displays. Null until
+   * the read lands. Exposed so screens can state what a wallet holds without
+   * a second balance read against a rate-limited RPC.
+   */
+  ethWei: bigint | null;
+  /**
+   * USDC balance in base units (6 decimals), for available-to-trade displays.
+   * Null until the read lands.
+   */
+  usdcUnits: bigint | null;
+  /**
    * The wallets to offer, in offer order — the wallet someone already has first,
    * Coinbase Wallet second, which is the preference `lib/wagmi.ts` states.
    *
@@ -228,6 +239,8 @@ export function useWallet({ gasWei = null }: UseWalletInput = {}): UseWalletResu
   return {
     state,
     address: address ?? null,
+    ethWei: eth.data?.value ?? null,
+    usdcUnits: usdc.data ?? null,
     connectors: options,
     connectFailed: connectError !== null && !isUserRejection(connectError),
     switchFailed: switchError !== null && !isUserRejection(switchError),

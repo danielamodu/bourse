@@ -160,7 +160,12 @@ export function clientId(): string {
  * which is the rule the whole registry is built on. Read inside the request for
  * the same reason as {@link clientId}.
  */
-function feeReceiver(): string | null {
+/**
+ * Exported so `lib/sell.ts` identifies the fee receiver the same way on the
+ * sell request: one reader for one variable. Read inside the request for the
+ * same reason as {@link clientId}.
+ */
+export function feeReceiver(): string | null {
   const value = process.env.BOURSE_FEE_RECEIVER;
   if (value === undefined) return null;
   const trimmed = value.trim();
@@ -643,13 +648,24 @@ export function executionCostBps(
   return bps > 0 ? bps : 0;
 }
 
-/** True once a quote is past its expiry, or already at it. */
-export function isQuoteExpired(quote: Quote, nowMs: number): boolean {
+/**
+ * True once a quote is past its expiry, or already at it.
+ *
+ * Structural on purpose: buy and sell quotes are different types with the
+ * same clock, and expiry is the one question both answers share.
+ */
+export function isQuoteExpired(
+  quote: Pick<Quote, "expiresAtMs">,
+  nowMs: number,
+): boolean {
   return nowMs >= quote.expiresAtMs;
 }
 
-/** Whole milliseconds left on a quote, floored at zero. */
-export function quoteMsRemaining(quote: Quote, nowMs: number): number {
+/** Whole milliseconds left on a quote, floored at zero. Same clock, same shape. */
+export function quoteMsRemaining(
+  quote: Pick<Quote, "expiresAtMs">,
+  nowMs: number,
+): number {
   return Math.max(0, quote.expiresAtMs - nowMs);
 }
 

@@ -1,17 +1,19 @@
 /**
- * USDC, as far as a buy needs it: read the allowance, set the allowance.
+ * The standard ERC-20 allowance/approve pair, for the token being spent —
+ * USDC on a buy, the stock token on a sell. One pinned shape rather than one
+ * per token: `allowance` and `approve` are the same two functions on every
+ * ERC-20, and a second copy would be a second chance to drift.
  *
  * Two functions and no more. A full ERC-20 ABI here would put `transfer` and
- * `transferFrom` within reach of anything that imports this file, and nothing in
- * Bourse moves a user's USDC itself — the router does, under an allowance the user
- * signed for. Keeping the ABI to what we call is the cheapest way to make that true
- * by construction rather than by review.
+ * `transferFrom` within reach of anything that imports this file, and nothing
+ * in Bourse moves a user's tokens itself — the router does, under an
+ * allowance the user signed for. Keeping the ABI to what we call is the
+ * cheapest way to make that true by construction rather than by review.
  *
  * The `spender` is never a value from a response. It is
- * `KYBERSWAP_ROUTER_ADDRESS`, the pinned constant, passed at the call site in
- * `hooks/useTrade.ts`.
+ * `KYBERSWAP_ROUTER_ADDRESS`, the pinned constant, passed at the call site.
  */
-export const usdcAbi = [
+export const tokenAllowanceAbi = [
   {
     type: "function",
     name: "allowance",
@@ -33,6 +35,9 @@ export const usdcAbi = [
     outputs: [{ name: "", type: "bool" }],
   },
 ] as const;
+
+/** The buy path's name for {@link tokenAllowanceAbi}. Same shape, same pin. */
+export const usdcAbi = tokenAllowanceAbi;
 
 /**
  * Chainlink AggregatorV3Interface — only the two functions we call.

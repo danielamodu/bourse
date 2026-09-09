@@ -304,6 +304,10 @@ export function useTrade({
           wallet,
           allowance,
           amountIn,
+          // Null, deliberately: the buy flow's USDC gate is `walletState`'s
+          // `no-usdc`, and a second balance judgement here would be a second
+          // copy of that sentence. See `TradeInput.balance`.
+          balance: null,
           building,
           approval,
           swap,

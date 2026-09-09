@@ -1,0 +1,62 @@
+/**
+ * Brand marks, in the ported visual system's own classes.
+ *
+ * Presentational only. `Mark` is the real logo mark, recovered from the
+ * reference repo's own history (`9d1970a^:repository-assets/bourse-logo-mark.png`,
+ * removed there in favour of managed storage) — a client visual asset, never
+ * server/shared code. `CompanyIcon` serves the six company SVGs from
+ * `public/logos/`; META has no published mark, so it renders the approved
+ * text badge in the same `company-badge` style.
+ */
+
+const LOGO_PATHS: Record<string, string> = {
+  AAPL: "/logos/AAPL.svg",
+  AMZN: "/logos/AMZN.svg",
+  GOOGL: "/logos/GOOGL.svg",
+  MSFT: "/logos/MSFT.svg",
+  NVDA: "/logos/NVDA.svg",
+  TSLA: "/logos/TSLA.svg",
+};
+
+/** Badge grounds from the ported design. META's is the neutral fallback. */
+const BADGE_COLORS: Record<string, string> = {
+  AAPL: "#151617",
+  AMZN: "#D18C32",
+  GOOGL: "#5787BB",
+  MSFT: "#4F6FCE",
+  NVDA: "#73A85A",
+  TSLA: "#C84340",
+  META: "#5B5E62",
+};
+
+export function Mark({ size = 30 }: { size?: number }) {
+  return (
+    <img
+      className="brand-mark"
+      src="/logo-mark.png"
+      alt="Bourse"
+      style={{ width: size, height: size }}
+    />
+  );
+}
+
+export function CompanyIcon({
+  symbol,
+  color,
+}: {
+  symbol: string;
+  color?: string;
+}) {
+  const ground = color ?? BADGE_COLORS[symbol] ?? "#5B5E62";
+  const logo = LOGO_PATHS[symbol];
+
+  return (
+    <div className="company-badge" style={{ background: ground }}>
+      {logo === undefined ? (
+        <span aria-hidden="true">{symbol.slice(0, 1)}</span>
+      ) : (
+        <img className="company-logo" src={logo} alt={`${symbol} logo`} />
+      )}
+    </div>
+  );
+}

@@ -59,13 +59,26 @@ export type TradeInput = {
    */
   allowance: bigint | null;
   /**
-   * USDC base units the swap spends: the quote's own `usdcIn`.
+   * Base units the swap spends, in the input token's own decimals: the quote's
+   * own `usdcIn` on a buy, the sell quote's `tokenIn` on a sell.
    *
    * Positive by construction. This module is only asked what to render once there
    * is a quote on screen, and a quote exists only for an amount inside the band
-   * `parseQuoteParams` enforces.
+   * the route's own params enforce.
    */
   amountIn: bigint;
+  /**
+   * Balance of the token being spent, in that token's own units — or null
+   * where the flow does not judge it.
+   *
+   * The buy flow passes null: its USDC gate is `walletState`'s `no-usdc`,
+   * which owns that sentence and its action, and a second balance check here
+   * would be a second copy of it. The sell flow passes the stock balance,
+   * because no wallet state knows per-token holdings and an approval that
+   * cannot settle is gas for nothing. Null means "not judged here", never
+   * "zero" — an unread balance must not read as an empty wallet.
+   */
+  balance: bigint | null;
   /** Whether a `/api/build` request is in flight. */
   building: boolean;
   /** The approval transaction. `idle` before one is sent. */
@@ -90,6 +103,13 @@ export type TradeState =
   | { kind: "blocked"; wallet: WalletState["kind"] }
   /** The quote on screen is stale. Nothing may be signed against it. */
   | { kind: "quote-expired" }
+  /**
+   * The wallet holds less of the input token than the trade spends. The
+   * button names the shortfall and stays disabled; there is no action that
+   * fixes it on this screen, because funding a stock balance happens by
+   * buying, not by pressing.
+   */
+  | { kind: "insufficient-balance" }
   /** Connected and quoted, allowance not read yet. Neither approved nor not. */
   | { kind: "checking-allowance" }
   /**
@@ -157,12 +177,20 @@ export type TradeState =
  * 8. THE ALLOWANCE READ BEFORE THE ALLOWANCE. A pending read is null, and null read
  *    as zero shows an approve step to someone who has already approved — who would
  *    then pay for a second one.
- * 9. Then the allowance itself, which is the whole of the approve decision.
- */
+  * 9. Then the allowance itself, which is the whole of the approve decision.
+  *
+  * 10. THE INPUT BALANCE sits between the expired quote and the allowance
+  *  read, and only where a flow supplies it. Below expiry because a stale
+  *  number refreshes itself while a shortfall does not move; above the
+  *  allowance because permission for funds that are not there is gas for
+  *  nothing. The buy flow supplies null and is unaffected — its USDC gate is
+  *  `walletState`, which keeps that sentence.
+  */
 export function tradeState({
   wallet,
   allowance,
   amountIn,
+  balance,
   building,
   approval,
   swap,
@@ -186,6 +214,20 @@ export function tradeState({
 
   if (building) return { kind: "building" };
   if (quoteExpired) return { kind: "quote-expired" };
+
+  /*
+   * The input funds, before the permission for them. An approval signed for
+   * a trade that cannot settle is a real transaction with a real fee and
+   * nothing to show for it, so the shortfall outranks the approve step. It
+   * sits below the in-flight states above — money already in motion is still
+   * described as in motion — and below an expired quote, which refreshes
+   * itself on a timer while a shortfall does not. Null balance is not judged:
+   * the buy flow leaves it null and its wallet gate owns that sentence.
+   */
+  if (balance !== null && balance < amountIn) {
+    return { kind: "insufficient-balance" };
+  }
+
   if (allowance === null) return { kind: "checking-allowance" };
 
   // A `confirmed` approval reaches this line rather than skipping it, and that is

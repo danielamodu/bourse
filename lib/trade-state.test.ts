@@ -41,6 +41,9 @@ function input(overrides: Partial<TradeInput> = {}): TradeInput {
     wallet: READY_WALLET,
     allowance: 50_000_000n,
     amountIn: 30_000_000n,
+    // Null like the buy flow: the balance check is off unless a case turns
+    // it on, so every existing expectation below keeps meaning what it meant.
+    balance: null,
     building: false,
     approval: "idle",
     swap: "idle",
@@ -77,6 +80,37 @@ describe("tradeState: the wallet gate", () => {
         quoteExpired: true,
       }),
     ).toBe("blocked");
+  });
+});
+
+describe("tradeState: the input balance", () => {
+  it("is not judged when null, however small the allowance", () => {
+    // The buy flow's contract: a null balance leaves every existing answer
+    // exactly where it was, including the approve step.
+    expect(kindOf({ balance: null, allowance: 0n })).toBe("needs-approval");
+    expect(kindOf({ balance: null })).toBe("ready");
+  });
+
+  it("blocks below the amount, and only below it", () => {
+    expect(kindOf({ balance: 29_999_999n })).toBe("insufficient-balance");
+    expect(kindOf({ balance: 30_000_000n })).toBe("ready");
+    expect(kindOf({ balance: 30_000_001n })).toBe("ready");
+  });
+
+  it("outranks the approve step but nothing above the wallet gate", () => {
+    // Permission for funds that are not there is gas for nothing.
+    expect(kindOf({ balance: 0n, allowance: 0n })).toBe("insufficient-balance");
+    // The wallet, an in-flight swap and a just-declined approval all still
+    // describe the moment better than a shortfall does.
+    expect(
+      kindOf({ balance: 0n, wallet: { kind: "disconnected" } }),
+    ).toBe("blocked");
+    expect(kindOf({ balance: 0n, swap: "signing" })).toBe("signing");
+    expect(kindOf({ balance: 0n, approval: "rejected" })).toBe("rejected");
+  });
+
+  it("yields to an expired quote, which refreshes itself", () => {
+    expect(kindOf({ balance: 0n, quoteExpired: true })).toBe("quote-expired");
   });
 });
 
