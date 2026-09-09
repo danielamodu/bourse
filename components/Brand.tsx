@@ -13,12 +13,19 @@ const LOGO_PATHS: Record<string, string> = {
   AAPL: "/logos/AAPL.svg",
   AMZN: "/logos/AMZN.svg",
   GOOGL: "/logos/GOOGL.svg",
+  META: "/logos/META.svg",
   MSFT: "/logos/MSFT.svg",
+  MSTR: "/logos/MSTR.svg",
   NVDA: "/logos/NVDA.svg",
+  SPCX: "/logos/SPCX.svg",
   TSLA: "/logos/TSLA.svg",
 };
 
-/** Badge grounds from the ported design. META's is the neutral fallback. */
+/**
+ * Badge grounds from the ported design for the original six; neutral
+ * graphite for the marks added since, whose brand colors were never part
+ * of the system. SNDK has no published mark and keeps the letter badge.
+ */
 const BADGE_COLORS: Record<string, string> = {
   AAPL: "#151617",
   AMZN: "#D18C32",
@@ -27,7 +34,20 @@ const BADGE_COLORS: Record<string, string> = {
   NVDA: "#73A85A",
   TSLA: "#C84340",
   META: "#5B5E62",
+  MSTR: "#5B5E62",
+  SPCX: "#5B5E62",
 };
+
+/**
+ * The logo file for a symbol, or null where no mark is published.
+ *
+ * Only the six SVGs in `public/logos/` exist; META, MSTR, SNDK and SPCX have
+ * no published mark, so callers render a text badge instead of an `img` that
+ * would 404. Never guess a logo URL — a wrong image is worse than a letter.
+ */
+export function logoPath(symbol: string): string | null {
+  return LOGO_PATHS[symbol] ?? null;
+}
 
 export function Mark({ size = 30 }: { size?: number }) {
   return (
