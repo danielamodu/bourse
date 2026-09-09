@@ -12,7 +12,7 @@ import {
 } from "@/lib/tokens";
 
 /**
- * Token quantities for the four published tokens, read off each contract.
+ * Token quantities for the ten published tokens, read off each contract.
  *
  * Raw quantities only — no naira, no gains, no cost basis. Naira valuation
  * needs a price the portfolio joins on screen and labels approximate,

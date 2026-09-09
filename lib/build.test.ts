@@ -792,7 +792,7 @@ describe("parseBuildBody", () => {
   it("rejects a listed stock we hold no address for, by name", () => {
     // A stock we know but cannot quote and a string that is not a stock are
     // different mistakes, and the message says which one happened.
-    expect(rejection(posted({ symbol: "MSFT" }))).toContain("MSFT");
+    expect(rejection(posted({ symbol: "COIN" }))).toContain("COIN");
   });
 
   it("rejects an amountIn that is not a string of digits", () => {

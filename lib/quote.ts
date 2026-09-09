@@ -714,7 +714,7 @@ export type QuoteParams =
  * the route itself cannot be exercised without `next/server`, and this is the part
  * with the decisions in it.
  *
- * `symbol` has to be one of the four we hold an address for; a stock we know but
+  * `symbol` has to be one of the ten we hold an address for; a stock we know but
  * cannot quote is rejected by name, because "MSFT is not quotable" and "ZZZZ is
  * not a stock" are different mistakes. `amountIn` is USDC base units as an
  * integer string, bounded at both ends by the band the hook checks against

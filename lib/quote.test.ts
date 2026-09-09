@@ -686,12 +686,12 @@ describe("parseQuoteParams", () => {
   });
 
   it("rejects a listed stock we hold no address for, by name", () => {
-    // "TSLA is not quotable" and "ZZZZ is not a stock" are different mistakes, and
+    // "COIN is not quotable" and "ZZZZ is not a stock" are different mistakes, and
     // the first one is worth saying plainly — the token is real, the pool is not.
-    const result = parse("symbol=TSLA&amountIn=30000000");
+    const result = parse("symbol=COIN&amountIn=30000000");
 
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toContain("TSLA");
+    if (!result.ok) expect(result.reason).toContain("COIN");
   });
 
   it("rejects anything that is not an integer number of base units", () => {
@@ -907,9 +907,9 @@ describe("parseQuoteWire: rejections", () => {
   });
 
   it("rejects a symbol we hold no address for", async () => {
-    // TSLA is issued and has a working feed, and no published address — so a
+    // COIN is issued and has a working feed, and no published address — so a
     // quote naming it did not come from us.
-    const result = parseQuoteWire({ ...(await wireFields()), symbol: "TSLA" });
+    const result = parseQuoteWire({ ...(await wireFields()), symbol: "COIN" });
     expect(result.kind).toBe("failed");
   });
 

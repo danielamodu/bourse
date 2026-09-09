@@ -117,9 +117,9 @@ function summarise(result: QuoteResult): string {
 /**
  * One probe-sized quote per published token.
  *
- * One test each, so a failure names the token. Serialised with a delay in front of
- * every request — four requests is nothing, but the same courtesy the RPC reads
- * get costs nothing either.
+  * One test each, so a failure names the token. Serialised with a delay in front of
+  * every request — ten requests is nothing, but the same courtesy the RPC reads
+  * get costs nothing either.
  */
 describe("a $30 quote for each published token", () => {
   for (const symbol of QUOTABLE_SYMBOLS) {

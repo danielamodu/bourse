@@ -23,9 +23,9 @@ import {
  * Unauthenticated, like `/api/quote` and for the same reason: there is no
  * session to authenticate against at the point this is called. What stands in
  * for auth is the closed input surface — `parseSellQuoteParams` accepts one
- * of four registry keys and an integer inside a bounded band, so the route
- * cannot be pointed at an arbitrary token, chain or amount. Only the four
- * tradeable tokens are sellable: the address is resolved server-side from
+ * of ten registry keys and an integer inside a bounded band, so the route
+ * cannot be pointed at an arbitrary token, chain or amount. Only published
+ * tokens are sellable: the address is resolved server-side from
  * the registry, where the `0xb2…` shape assertion already ran.
  *
  * The validation itself lives in `lib/sell.ts` so the offline suite covers

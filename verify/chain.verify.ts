@@ -34,7 +34,7 @@ import {
  *   Multicall3 is a genesis preinstall, the rest are deployed normally. All have
  *   EVM bytecode, so `eth_getCode` returning `0x` means the address is wrong.
  *   That is the assertion.
- * - **The four B20 tokens** sit in the `0xb2…` precompile range and run as native
+ * - **The ten B20 tokens** sit in the `0xb2…` precompile range and run as native
  *   client code outside the EVM. They return **exactly one byte** here, which
  *   this suite established on 2026-09-03. One byte is the cheapest way to be
  *   non-empty, and non-empty is what the `isContract`-style check in most routers
@@ -52,12 +52,12 @@ import {
  * confirms the transcription.
  *
  * Neither `0x` nor one byte against a token address is evidence of a problem.
- * Those four are established three other ways: sourced from base.org/stocks,
+ * Those ten are established three other ways: sourced from base.org/stocks,
  * shape checked, and confirmed by reading `symbol()` back off each one.
  *
  * Reads are serialised with a delay and rotate across endpoints, because
  * `mainnet.base.org` rate-limits after roughly a dozen calls in quick
- * succession and this file makes about thirty-five. `BASE_RPC_URL` joins that
+ * succession and this file makes about sixty. `BASE_RPC_URL` joins that
  * rotation when it is set — `verify/env.ts` loads `.env`, so a run reports on the
  * endpoint the deployment reads through rather than only on the public three.
  */
@@ -75,7 +75,7 @@ const DEPLOYED: ReadonlyArray<readonly [string, string]> = [
   ),
   ["Multicall3", MULTICALL3_ADDRESS],
   // USDC is an ordinary ERC-20, not a precompile, so it belongs in this group and
-  // not with the four B20 tokens. Every quote is denominated in it.
+  // not with the ten B20 tokens. Every quote is denominated in it.
   ["USDC", USDC_ADDRESS],
   // The pinned router. In Part B this is the spender of a user's USDC allowance,
   // which is the highest-consequence address in the repo: an approval to the wrong
@@ -92,6 +92,12 @@ const EXPECTED_SYMBOLS = [
   ["GOOGL", "GOOGLc"],
   ["AAPL", "AAPLc"],
   ["META", "METAc"],
+  ["AMZN", "AMZNc"],
+  ["MSFT", "MSFTc"],
+  ["MSTR", "MSTRc"],
+  ["SNDK", "SNDKc"],
+  ["SPCX", "SPCXc"],
+  ["TSLA", "TSLAc"],
 ] as const satisfies ReadonlyArray<
   readonly [keyof typeof TOKEN_ADDRESSES, string]
 >;
@@ -188,7 +194,7 @@ describe("contracts with bytecode: 13 feeds, Multicall3, USDC and the router", (
 });
 
 /**
- * The four token addresses were transcribed by hand, and a wrong one would point
+ * The ten token addresses were transcribed by hand, and a wrong one would point
  * a buy at some other contract — counterfeit NVDAc and GOOGLc tokens with
  * six-figure fake liquidity are live on Base right now. Reading `symbol()` back
  * off the address is what verifies the transcription.
@@ -237,7 +243,8 @@ describe("tokenized stock contracts: symbol() must match", () => {
  *
  * Every share count the buy flow shows rests on this number. It began as a value
  * inferred from arithmetic on a KyberSwap response; on 2026-09-03 this suite read
- * it off all four contracts, all four returned 8, and `TOKEN_DECIMALS` in
+ * it off the first four contracts, and on 2026-09-09 off AMZN, MSFT, MSTR, SNDK,
+ * SPCX and TSLA — all ten returned 8, and `TOKEN_DECIMALS` in
  * lib/tokens records that with this script named as the provenance.
  *
  * Because the registry now hardcodes those numbers, the check inverts: it asserts

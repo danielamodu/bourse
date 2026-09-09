@@ -102,18 +102,22 @@ describe("assertValidTokenAddress", () => {
 /**
  * The transcription check.
  *
- * These four addresses were typed by hand, so this asserts the documented shape
+ * These ten addresses were typed by hand, so this asserts the documented shape
  * on the actual registry values rather than on a copy. `verify/chain.verify.ts`
  * is the other half: it reads `symbol()` back off each contract.
  */
 describe("TOKEN_ADDRESSES shape", () => {
-  it("holds 0xb2 + 20 zeros + 18 hex characters on all four", () => {
+  it("holds 0xb2 + 20 zeros + 18 hex characters on all ten", () => {
     const entries = Object.entries(TOKEN_ADDRESSES);
-    expect(entries).toHaveLength(4);
+    expect(entries).toHaveLength(10);
 
     for (const [symbol, address] of entries) {
       expect(address, symbol).toHaveLength(42);
-      expect(address.slice(0, 4), symbol).toBe("0xb2");
+      // Lowercased before comparing: EIP-55 checksumming can capitalize any
+      // hex letter, including the `b` in `b2` — MSFT's canonical form starts
+      // `0xB2`, and lowercasing the constant to satisfy this would throw away
+      // the transcription check the checksum test below performs.
+      expect(address.slice(0, 4).toLowerCase(), symbol).toBe("0xb2");
       expect(address.slice(4, 24), symbol).toBe(zeros(20));
       expect(address.slice(24), symbol).toMatch(/^[0-9a-fA-F]{18}$/);
       expect(isValidTokenAddress(address), symbol).toBe(true);
@@ -160,9 +164,9 @@ describe("every pinned address", () => {
       ["KYBERSWAP_ROUTER_ADDRESS", KYBERSWAP_ROUTER_ADDRESS] as const,
     ];
 
-    // 13 feeds + 13 registry feeds + 4 registry tokens + 3 singletons. Counted so a
-    // fourteenth token cannot arrive without its addresses joining this guard.
-    expect(pinned).toHaveLength(33);
+    // 13 feeds + 13 registry feeds + 10 registry tokens + 3 singletons. Counted so
+    // an eleventh token cannot arrive without its addresses joining this guard.
+    expect(pinned).toHaveLength(39);
 
     for (const [label, address] of pinned) {
       expect(address, label).toMatch(/^0x[0-9a-fA-F]{40}$/);

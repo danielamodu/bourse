@@ -120,9 +120,9 @@ export type ProbeOptions = {
 };
 
 /**
- * Probes all four published tokens and reports on all thirteen.
+ * Probes all ten published tokens and reports on all thirteen.
  *
- * Four requests, issued together. That is four, not thirteen: the nine without a
+ * Ten requests, issued together. That is ten, not thirteen: the three without a
  * published address are answered from the registry without a request, since there
  * is no address to put in one.
  *
@@ -169,8 +169,8 @@ const UNPUBLISHED: TradeabilityReport = {
 /**
  * The reports to render before any probe has run.
  *
- * The nine without a published address are still `unpublished` — that is a
- * registry fact and no request would change it. The four that could be quoted are
+ * The three without a published address are still `unpublished` — that is a
+ * registry fact and no request would change it. The ten that could be quoted are
  * `unknown`, because not having asked is not the same as having been told no.
  */
 export function unknownTradeability(): TradeabilityReports {

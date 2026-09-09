@@ -31,9 +31,11 @@ import { defineConfig } from "vitest/config";
  * checking something nobody ships. `vitest.config.ts` has no such setup file, on
  * purpose: `npm test` must not acquire an opinion about a local environment.
  *
- * The timeout is generous because a chain read may fall through three endpoints,
- * each with its own 12s request timeout and a delay in front of it.
- */
+  * The timeout is generous because a chain read may fall through three endpoints,
+  * each with its own 12s request timeout and a delay in front of it — and
+  * because ten published tokens now serialise their reads where four once
+  * did, so the per-token suites run roughly twice as long as they used to.
+  */
 export default defineConfig({
   resolve: {
     alias: {
@@ -44,6 +46,6 @@ export default defineConfig({
     environment: "node",
     include: ["verify/**/*.verify.ts"],
     setupFiles: ["verify/env.ts"],
-    testTimeout: 45_000,
+    testTimeout: 120_000,
   },
 });

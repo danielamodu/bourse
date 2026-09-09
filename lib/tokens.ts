@@ -15,8 +15,8 @@ import { mapKeys } from "@/lib/map-keys";
  * and an authored list goes stale between them.
  *
  * What the registry does record is whether an address has been *published*,
- * which is a different and durable fact: nine of the thirteen have no address to
- * quote against, so they cannot be asked about at all.
+ * which is a different and durable fact: three of the thirteen (COIN, CRCL,
+ * INTC) have no address to quote against, so they cannot be asked about at all.
  *
  * SOURCING — addresses are copied from a verified source, never guessed:
  *
@@ -25,11 +25,11 @@ import { mapKeys } from "@/lib/map-keys";
  *   `decimals()` (8 on every one) and `latestRoundData()`. Recorded in
  *   CLAUDE.md and copied here verbatim.
  *
- * - Token contracts: the four whose addresses Coinbase has published, from
- *   base.org/stocks. The other nine contracts exist but their addresses are not
+ * - Token contracts: the ten whose addresses Coinbase has published, from
+ *   base.org/stocks. The other three contracts exist but their addresses are not
  *   published, so their `address` is null and no read is attempted against them.
  *   Verified by `verify/chain.verify.ts` (`npm run verify:chain`), which reads
- *   `symbol()` back off each of the four — they were transcribed by hand, so
+ *   `symbol()` back off each of the ten — they were transcribed by hand, so
  *   that check is what stands behind them. No address ships on the strength of
  *   looking right.
  *
@@ -83,33 +83,41 @@ export const CHAINLINK_FEEDS = {
 } as const satisfies Record<StockSymbol, Address>;
 
 /**
- * The four token addresses Coinbase has published, from base.org/stocks.
+ * The ten token addresses Coinbase has published, from base.org/stocks.
  *
  * Not a tradeability list — see the note at the top of this file. It is the list
  * of tokens we have an address for, and therefore the list we are able to ask an
- * aggregator about. The remaining nine are issued but unpublished, so there is
- * nothing to quote against.
+ * aggregator about. The remaining three (COIN, CRCL, INTC) are issued but
+ * unpublished, so there is nothing to quote against.
  *
- * Each of the four was transcribed by hand and is checked three ways before it can
+ * Each of the ten was transcribed by hand and is checked three ways before it can
  * ship: the shape assertion below, at import time; the EIP-55 checksum, in
  * `lib/address.test.ts`, which is what catches a wrong character in the tail that
  * the shape check reads as valid hex; and `symbol()` read back off the contract in
  * `verify/chain.verify.ts`. The casing carries the second of those, so these stay
  * canonical — the twenty zeros have no case, and everything either side of them
- * does.
+ * does. The first four were verified 2026-09-03; AMZN, MSFT, MSTR, SNDK, SPCX and
+ * TSLA were sourced from the same list and verified the same three ways on
+ * 2026-09-09, each routing a clean $30 probe through the pinned router.
  */
 export const TOKEN_ADDRESSES = {
   NVDA: "0xb20000000000000000000078ee7ce2fE4908108C",
   GOOGL: "0xb2000000000000000000002D0BA3164cc74f58B7",
   AAPL: "0xb200000000000000000000C2e324d24d7eEcd1fb",
   META: "0xb2000000000000000000008bC8786B856E61707C",
+  AMZN: "0xb200000000000000000000d9192b6B456483C2E8",
+  MSFT: "0xB200000000000000000000Ab99cFa739E253872B",
+  MSTR: "0xb2000000000000000000004884b426556b92883d",
+  SNDK: "0xb200000000000000000000397293Cb8cda9a10c5",
+  SPCX: "0xb2000000000000000000007b9fcbd005511aCBd5",
+  TSLA: "0xb2000000000000000000001e800a7f5189430cD0",
 } as const;
 
 /** A symbol we hold an address for, and so can request a quote for. */
 export type QuotableSymbol = keyof typeof TOKEN_ADDRESSES;
 
 /**
- * The same four as an array, for iterating.
+ * The same ten as an array, for iterating.
  *
  * `Object.keys` widens to `string[]`, so the key type is restored by assertion
  * here — once, in the file that owns the object — rather than at each call site.
@@ -124,15 +132,17 @@ export const QUOTABLE_SYMBOLS = Object.keys(
  * Token `decimals()`, read from each contract — not assumed, and not shared with
  * the feeds.
  *
- * PROVENANCE: verified on-chain 2026-09-03 by `npm run verify:chain`, which
- * `eth_call`s `decimals()` (selector `0x313ce567`) against each of these four
- * addresses. All four return 8. Before that it was inferred from arithmetic on a
+ * PROVENANCE: verified on-chain by `npm run verify:chain`, which `eth_call`s
+ * `decimals()` (selector `0x313ce567`) against each of these ten addresses —
+ * the first four on 2026-09-03, AMZN, MSFT, MSTR, SNDK, SPCX and TSLA on
+ * 2026-09-09. All ten return 8. Before that it was inferred from arithmetic on a
  * KyberSwap response, which is why it is written down here with the source named:
  * every share count the buy flow displays is scaled by this number, so a wrong
  * value is off by orders of magnitude and looks plausible.
  *
  * Recorded per token rather than as one constant because B20 precision is a
- * per-token setting. A fifth token gets its own read; it does not inherit this 8.
+ * per-token setting. An eleventh token gets its own read; it does not inherit
+ * this 8.
  *
  * The Chainlink feeds also return 8 from their own `decimals()`. That is a
  * coincidence of two conventions, not one shared value — `lib/read-prices.ts`
@@ -143,6 +153,12 @@ export const TOKEN_DECIMALS = {
   GOOGL: 8,
   AAPL: 8,
   META: 8,
+  AMZN: 8,
+  MSFT: 8,
+  MSTR: 8,
+  SNDK: 8,
+  SPCX: 8,
+  TSLA: 8,
 } as const satisfies Record<QuotableSymbol, number>;
 
 /**

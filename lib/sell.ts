@@ -469,8 +469,8 @@ export type SellQuoteParams =
  * Validates the query string `/api/sell-quote` was called with.
  *
  * Pure and here rather than in the route so it is covered by the offline
- * suite. `symbol` has to be one of the four we hold an address for — only
- * the four tradeable tokens are sellable, and a stock we know but hold no
+ * suite. `symbol` has to be one of the ten we hold an address for — only
+ * published tokens are sellable, and a stock we know but hold no
  * address for is rejected by name. `amountIn` is token base units as an
  * integer string, bounded at both ends.
  */

@@ -98,8 +98,8 @@ export const CALLDATA_MALFORMED_DETAIL = "build-calldata-malformed";
  * the user is agreeing to eat between signing and mining, and it is encoded into
  * the calldata as a minimum out. Set it too tight and ordinary block-to-block
  * movement reverts the swap after the user has paid gas; set it too loose and a
- * sandwich has room to work. Half a percent is the usual floor for a liquid pair,
- * and these four are the liquid ones.
+  * sandwich has room to work. Half a percent is the usual floor for a liquid pair,
+  * and these ten are the liquid ones.
  */
 export const SLIPPAGE_BPS = 50;
 

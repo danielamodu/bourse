@@ -137,10 +137,10 @@ describe("parseSellQuoteParams", () => {
       ok: false,
       reason: "symbol must be one of the listed stocks",
     });
-    // MSFT is issued but unpublished: nothing to quote against.
-    expect(params("MSFT", "1000000")).toEqual({
+    // COIN is issued but unpublished: nothing to quote against.
+    expect(params("COIN", "1000000")).toEqual({
       ok: false,
-      reason: "MSFT has no token address on Base, so it cannot be sold",
+      reason: "COIN has no token address on Base, so it cannot be sold",
     });
   });
 
@@ -404,7 +404,7 @@ describe("parseSellBuildBody", () => {
 
   it("names the field at fault", () => {
     expect(parseSellBuildBody(null)).toMatchObject({ ok: false });
-    expect(parseSellBuildBody(body({ symbol: "MSFT" }))).toMatchObject({
+    expect(parseSellBuildBody(body({ symbol: "COIN" }))).toMatchObject({
       ok: false,
     });
     expect(parseSellBuildBody(body({ sender: "0x0" }))).toMatchObject({

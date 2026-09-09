@@ -25,7 +25,7 @@ import {
  * inheriting an 8 it was never read for, a feed address pasted into the token map.
  */
 
-const QUOTABLE_COUNT = 4;
+const QUOTABLE_COUNT = 10;
 const LISTED_ONLY_COUNT = STOCK_SYMBOLS.length - QUOTABLE_COUNT;
 
 describe("the symbol list", () => {
@@ -66,7 +66,7 @@ describe("QUOTABLE_SYMBOLS", () => {
     }
   });
 
-  it("is the four Coinbase has published an address for", () => {
+  it("is the ten Coinbase has published an address for", () => {
     expect(QUOTABLE_SYMBOLS).toHaveLength(QUOTABLE_COUNT);
   });
 });
@@ -80,7 +80,7 @@ describe("TOKEN_DECIMALS", () => {
     );
   });
 
-  it("records the 8 that verify:chain read off all four contracts", () => {
+  it("records the 8 that verify:chain read off all ten contracts", () => {
     for (const symbol of QUOTABLE_SYMBOLS) {
       expect(TOKEN_DECIMALS[symbol], symbol).toBe(8);
     }
@@ -106,7 +106,7 @@ describe("STOCK_TOKENS", () => {
     }
   });
 
-  it("carries the registry's address and precision for the published four", () => {
+  it("carries the registry's address and precision for the published ten", () => {
     for (const symbol of QUOTABLE_SYMBOLS) {
       expect(STOCK_TOKENS[symbol].address, symbol).toBe(
         TOKEN_ADDRESSES[symbol],
@@ -117,7 +117,7 @@ describe("STOCK_TOKENS", () => {
     }
   });
 
-  it("leaves the other nine with nothing to quote against", () => {
+  it("leaves the other three with nothing to quote against", () => {
     const unpublished = STOCK_SYMBOLS.filter(
       (symbol) => STOCK_TOKENS[symbol].address === null,
     );
@@ -193,7 +193,7 @@ describe("the rendered lists", () => {
     expect(STOCK_LIST.map((token) => token.symbol)).toEqual([...STOCK_SYMBOLS]);
   });
 
-  it("QUOTABLE_LIST is the four with an address, in the same order", () => {
+  it("QUOTABLE_LIST is the ten with an address, in the same order", () => {
     expect(QUOTABLE_LIST).toHaveLength(QUOTABLE_COUNT);
 
     expect(QUOTABLE_LIST.map((token) => token.symbol)).toEqual(
@@ -225,10 +225,12 @@ describe("looking a token up", () => {
     expect(findStock("Googl")?.symbol).toBe("GOOGL");
   });
 
-  it("resolves the unpublished nine too", () => {
+  it("resolves the unpublished three too", () => {
     // They have a page — reference price, no buy affordance — so they have to
     // resolve.
-    expect(findStock("tsla")?.address).toBeNull();
+    expect(findStock("coin")?.address).toBeNull();
+    expect(findStock("crcl")?.address).toBeNull();
+    expect(findStock("intc")?.address).toBeNull();
   });
 
   it("returns null rather than guessing", () => {

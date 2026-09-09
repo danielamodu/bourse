@@ -28,10 +28,9 @@ import {
  *   sell this address pulls the *stock* under the user's approval, so letting
  *   a response choose it would be the same worst outcome wearing the other
  *   token.
- * - **A token address.** `symbol` is one of four registry keys and the
+ * - **A token address.** `symbol` is one of ten registry keys and the
  *   address is resolved server-side, from the registry, which is where the
- *   `0xb2…` shape assertion already ran. Only the four tradeable tokens are
- *   sellable.
+ *   `0xb2…` shape assertion already ran. Only published tokens are sellable.
  *
  * Unauthenticated, like the buy routes and for the same reason. What stands
  * in for auth is the closed input surface — four fields, three of them

@@ -16,7 +16,7 @@ import { parseQuoteParams, requestQuote, toQuoteWire } from "@/lib/quote";
  * Unauthenticated, deliberately and in line with `/api/ngn-rate`: `/markets` is
  * browseable with no wallet connected, so there is no session to authenticate
  * against at the point this is called. What stands in for auth is that the input
- * surface is closed — `parseQuoteParams` accepts one of four registry keys and an
+ * surface is closed — `parseQuoteParams` accepts one of ten registry keys and an
  * integer inside a bounded band, so the route cannot be pointed at an arbitrary
  * token, chain or amount, and cannot be made to forward an unbounded string to a
  * third party under our client id. It is a read of public market data either way.

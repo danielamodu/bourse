@@ -170,7 +170,7 @@ function routeFor(symbol: QuotableSymbol, amountOutUsd: string): Response {
 
 /**
  * A KyberSwap that answers per token, and records which tokens it was asked
- * about — the probe is supposed to ask about four addresses, not thirteen.
+ * about — the probe is supposed to ask about ten addresses, not thirteen.
  */
 function aggregator(answer: (symbol: QuotableSymbol, url: URL) => Response): {
   fetchImpl: typeof fetch;
@@ -201,7 +201,7 @@ function aggregator(answer: (symbol: QuotableSymbol, url: URL) => Response): {
 const INSIDE_BUDGET = "29.94";
 
 describe("probeTradeability", () => {
-  it("reports on all thirteen while asking about four", async () => {
+  it("reports on all thirteen while asking about ten", async () => {
     const { fetchImpl, asked } = aggregator((symbol) =>
       routeFor(symbol, INSIDE_BUDGET),
     );
@@ -241,11 +241,11 @@ describe("probeTradeability", () => {
       expect(reports[symbol].executionCostBps, symbol).toBe(20);
     }
 
-    // TSLA is issued, has a working feed, and has no published address — so
+    // COIN is issued, has a working feed, and has no published address — so
     // there is nothing to ask, and the answer is not "no market".
-    expect(reports.TSLA.verdict).toBe("unpublished");
-    expect(reports.TSLA.usdPerShare).toBeNull();
-    expect(reports.MSFT.verdict).toBe("unpublished");
+    expect(reports.COIN.verdict).toBe("unpublished");
+    expect(reports.COIN.usdPerShare).toBeNull();
+    expect(reports.INTC.verdict).toBe("unpublished");
   });
 
   it("keeps one token's answer from colouring the others", async () => {
@@ -289,9 +289,9 @@ describe("probeTradeability", () => {
       expect(reports[symbol].verdict, symbol).toBe("unknown");
     }
 
-    // A dead aggregator says nothing about the nine, whose answer comes from the
+    // A dead aggregator says nothing about the three, whose answer comes from the
     // registry and needs no request.
-    expect(reports.TSLA.verdict).toBe("unpublished");
+    expect(reports.COIN.verdict).toBe("unpublished");
   });
 });
 
@@ -315,7 +315,8 @@ describe("unknownTradeability", () => {
       expect(reports[symbol].verdict, symbol).toBe("unknown");
     }
 
-    expect(reports.TSLA.verdict).toBe("unpublished");
-    expect(reports.SPCX.verdict).toBe("unpublished");
+    expect(reports.COIN.verdict).toBe("unpublished");
+    expect(reports.CRCL.verdict).toBe("unpublished");
+    expect(reports.INTC.verdict).toBe("unpublished");
   });
 });

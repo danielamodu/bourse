@@ -14,7 +14,7 @@ import { createPublicClient, fallback, http, type Chain } from "viem";
  * 3. And a dedicated endpoint in front of both, when the deployment has one —
  *    `BASE_RPC_URL`, server-only, see {@link dedicatedRpcUrl}.
  *
- * Anything that genuinely cannot be batched — hand-verifying four addresses, for
+ * Anything that genuinely cannot be batched — hand-verifying ten addresses, for
  * instance — uses `ethCall` one at a time with `sleep` in between.
  *
  * The chain is declared here rather than imported from `viem/chains`. That entry
@@ -248,7 +248,7 @@ export function ethCall(url: string, to: string, data: Hex): Promise<Hex> {
  * - **Precompiles** run as native client code outside the EVM, so there is no
  *   contract body to return.
  *
- * The four B20 tokenized stocks sit in the `0xb2…` precompile range and return
+  * The ten B20 tokenized stocks sit in the `0xb2…` precompile range and return
  * **exactly one byte** — verified 2026-09-03 by `verify:chain`. That looks
  * deliberate: one byte is the cheapest way to be non-empty, which is what the
  * `isContract`-style check in most routers and every Permit2 path tests before
