@@ -9,6 +9,7 @@ import { formatConnectorName } from "@/lib/format";
 import { useWallet, type WalletOption } from "@/hooks/useWallet";
 
 import { Mark } from "./Brand";
+import { WalletIcon } from "./WalletIcon";
 
 /**
  * Sign in on the ported `auth-page` visual: wallet chooser on the left,
@@ -34,11 +35,6 @@ export function AuthPage() {
         </Link>
         <div className="auth-form-wrap">
           <div className="eyebrow">ACCESS BOURSE</div>
-          <h1>
-            Own a piece
-            <br />
-            <em>of what&apos;s next.</em>
-          </h1>
           <p>
             Connect a wallet to fund, trade, and keep your global ownership in
             view.
@@ -55,7 +51,7 @@ export function AuthPage() {
                   aria-label={`Connect ${label}`}
                 >
                   <span className="wallet-avatar" aria-hidden="true">
-                    {label.slice(0, 1)}
+                    <WalletIcon icon={connector.icon} />
                   </span>
                   <span>
                     <strong>{label}</strong>

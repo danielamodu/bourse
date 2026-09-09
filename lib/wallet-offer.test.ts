@@ -143,6 +143,23 @@ describe("walletOffer", () => {
     expect(offer.at(-1)).toBe(COINBASE);
   });
 
+  it("collapses repeat announcements of one wallet to the first", () => {
+    // Live shape: discovery announced the same wallet three times, each with
+    // its own uid, and the panel rendered three identical buttons for it.
+    const repeat: OfferableWallet = {
+      uid: "u-metamask-2",
+      id: "io.metamask",
+      type: "injected",
+    };
+    const offer = walletOffer(
+      [GENERIC, COINBASE, METAMASK, repeat],
+      allReady([GENERIC, COINBASE, METAMASK, repeat]),
+    );
+
+    expect(uids(offer)).toEqual(["u-metamask", "u-coinbase"]);
+    expect(offer[0]).toBe(METAMASK);
+  });
+
   it("does not mutate the list it was given", () => {
     const input = [...ALL];
 

@@ -106,6 +106,13 @@ export type WalletOption = {
   uid: string;
   /** The connector's own name, unformatted — `formatConnectorName` is the view's. */
   name: string;
+  /**
+   * The wallet's own mark, supplied by the wallet itself over EIP-6963 (usually
+   * a data URI) — or null where the connector carries none. Read, never
+   * authored: no brand file in the repo could cover wallets that do not exist
+   * yet, and a wrong image is worse than a neutral glyph.
+   */
+  icon: string | null;
 };
 
 /** The connector type this config produces, taken from wagmi rather than restated. */
@@ -232,6 +239,10 @@ export function useWallet({ gasWei = null }: UseWalletInput = {}): UseWalletResu
       offered.map((connector) => ({
         uid: connector.uid,
         name: connector.name,
+        icon:
+          typeof connector.icon === "string" && connector.icon !== ""
+            ? connector.icon
+            : null,
       })),
     [offered],
   );

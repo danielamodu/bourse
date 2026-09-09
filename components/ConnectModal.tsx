@@ -5,6 +5,8 @@ import { ChevronRight, CircleHelp, X } from "lucide-react";
 import { formatConnectorName } from "@/lib/format";
 import type { WalletOption } from "@/hooks/useWallet";
 
+import { WalletIcon } from "./WalletIcon";
+
 /**
  * The wallet chooser, in the ported `connect-modal` markup.
  *
@@ -57,7 +59,7 @@ export function ConnectModal({
               onClick={() => onConnect(connector.uid)}
             >
               <span className="wallet-avatar" aria-hidden="true">
-                {label.slice(0, 1)}
+                <WalletIcon icon={connector.icon} />
               </span>
               <span>
                 <strong>{label}</strong>

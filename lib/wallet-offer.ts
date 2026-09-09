@@ -18,6 +18,9 @@
  * 3. **The wallet someone already has comes first.** `lib/wagmi.ts` says so by
  *    listing `injected` before `coinbaseWallet`; discovery appends to the end of the
  *    array, so the rule has to be applied rather than inherited.
+ * 4. **One entry per wallet.** Discovery can announce the same wallet more than
+ *    once, and each announcement arrives as a connector with its own uid —
+ *    every repeat renders as another identical button for one wallet.
  */
 
 /**
@@ -70,10 +73,24 @@ export function walletOffer<T extends OfferableWallet>(
       (injectedReady !== null && injectedReady.has(connector.uid)),
   );
 
-  const injected = offerable.filter(
+  /*
+   * Collapse repeat announcements before anything else counts entries. The
+   * `id` is reverse-DNS per wallet app, so grouping on it cannot merge two
+   * different wallets; the first announcement wins and keeps its connector
+   * identity, which `hooks/useWallet.ts` needs intact to connect with.
+   */
+  const seenIds = new Set<string>();
+  const distinct = offerable.filter((connector) => {
+    if (connector.type !== INJECTED_TYPE) return true;
+    if (seenIds.has(connector.id)) return false;
+    seenIds.add(connector.id);
+    return true;
+  });
+
+  const injected = distinct.filter(
     (connector) => connector.type === INJECTED_TYPE,
   );
-  const rest = offerable.filter((connector) => connector.type !== INJECTED_TYPE);
+  const rest = distinct.filter((connector) => connector.type !== INJECTED_TYPE);
 
   /*
    * A named wallet replaces the generic entry rather than joining it.
