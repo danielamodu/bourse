@@ -15,7 +15,8 @@
     "verify:quote": "vitest run --config vitest.verify.config.ts verify/quote.verify.ts",
     "verify:simulate": "vitest run --config vitest.verify.config.ts verify/simulate.verify.ts",
     "verify:sell-quote": "vitest run --config vitest.verify.config.ts verify/sell-quote.verify.ts",
-    "verify:sell-simulate": "vitest run --config vitest.verify.config.ts verify/sell-simulate.verify.ts"
+    "verify:sell-simulate": "vitest run --config vitest.verify.config.ts verify/sell-simulate.verify.ts",
+    "verify:multiplier": "vitest run --config vitest.verify.config.ts verify/multiplier.verify.ts"
   },
   "dependencies": {
     "@radix-ui/react-tooltip": "^1.2.16",

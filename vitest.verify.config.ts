@@ -17,7 +17,11 @@ import { defineConfig } from "vitest/config";
   * - `npm run verify:simulate` — the pinned router executed against live Base state
   *   with `eth_call` state overrides. Proves the built swap settles before any
   *   allowance is granted. Needs `BASE_RPC_URL`: public endpoints reject overrides.
-  * - `npm run verify` — all four.
+  * - `npm run verify:sell-quote` — the aggregator in the sell direction.
+  * - `npm run verify:sell-simulate` — the pinned router executed for a sale
+  *   against live state, from a real approver and with no overrides (B20
+  *   precompile storage is not overridable; the script proves why).
+  * - `npm run verify` — all six.
  *
  * Each script names its file so that verifying an address does not fire live
  * aggregator requests, and vice versa.

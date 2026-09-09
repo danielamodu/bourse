@@ -1,48 +1,58 @@
 import {
-  encodeAbiParameters,
+  decodeAbiParameters,
   encodeEventTopics,
   encodeFunctionData,
   getAddress,
-  keccak256,
-  toHex,
 } from "viem";
 import { describe, expect, it } from "vitest";
 
 import { SLIPPAGE_BPS, minAmountOutFor } from "@/lib/build";
 import { KYBERSWAP_ROUTER_ADDRESS } from "@/lib/quote";
-import { READ_DELAY_MS, dedicatedRpcUrl, sleep } from "@/lib/rpc";
 import {
-  buildSellSwap,
-  requestSellRoute,
-} from "@/lib/sell";
+  MULTICALL3_ADDRESS,
+  READ_DELAY_MS,
+  dedicatedRpcUrl,
+  sleep,
+} from "@/lib/rpc";
+import { buildSellSwap, requestSellRoute } from "@/lib/sell";
 import { TOKEN_ADDRESSES, TOKEN_DECIMALS } from "@/lib/tokens";
 
 /**
  * The pinned router, executed for a SALE against live Base state — with no
  * funds, no wallet and no signature.
  *
- * The mirror of `verify/simulate.verify.ts`: a fresh NVDA→USDC route is
- * built for a synthetic sender, then `eth_call`ed with a `stateDiff` on the
- * stock token giving that sender a sufficient stock balance and a sufficient
- * stock approval to the pinned router. The same call without overrides must
- * revert. The pair proves the overrides caused the success.
+ * The mirror of `verify/simulate.verify.ts`, with one settled difference.
+ * That script funds its sender with `eth_call` state overrides against
+ * USDC's storage. The same technique does NOT work here: step 2 of the first
+ * version of this script proved it, failing loudly when none of slots 0..20
+ * read back a positive `balanceOf` — B20 precompiles keep balances in native
+ * client state, outside contract storage that `eth_getStorageAt` or
+ * `stateDiff` can see. Overriding them is not a matter of finding the right
+ * slot; there is no slot. So this script proves the sale a different honest
+ * way:
  *
- * NO FUNDS, NO WALLET, NO SIGNATURE. Same arrangement as the buy
- * simulation: the sender is assembled from one repeated byte, and its
- * balance and approval exist only inside `eth_call` state overrides.
+ * 1. Find a real approver mechanically: recent NVDA Transfer recipients are
+ *    collected from `eth_getLogs` (topic derived with `encodeEventTopics`,
+ *    never a literal hash), their `balanceOf` and their
+ *    `allowance(recipient, pinned router)` are read back in two batched
+ *    Multicall3 calls, and the first recipient holding enough stock with
+ *    enough approval for the simulated size wins. No address is hardcoded
+ *    and none is supplied.
+ * 2. Build a fresh NVDA→USDC route for that sender — `recipient` is the
+ *    sender, set server-side, so the proceeds would go back to them.
+ * 3. Run the resulting `{ to, data, value }` twice as `eth_call`: once from
+ *    the approver, which must succeed against live allowances and return
+ *    non-empty data, and once from a synthetic sender with no funds, which
+ *    must revert. No overrides anywhere — nothing is fabricated, so the
+ *    pair proves the route executes rather than passing vacuously.
  *
- * ONE OPEN QUESTION THIS SCRIPT SETTLES. The stock tokens are B20
- * precompiles with one byte of code, and a precompile's balances may live in
- * native client state rather than in contract storage that `eth_getStorageAt`
- * and `stateDiff` can see. Step 2 therefore starts by asking: the balances
- * slot is whichever of slots 0..20 reads back the holder's `balanceOf`. If
- * none of them does while `balanceOf` is positive, precompile storage is not
- * exposed that way, and the script fails loudly saying exactly that — it
- * does not pretend a simulation ran. That verdict is itself the finding.
+ * No signature is needed at any point: `eth_call` never touches a key, and
+ * nothing is submitted. Assert `to` equals KYBERSWAP_ROUTER_ADDRESS and
+ * `value` is "0" as every other verify script does.
  *
- * Like the buy script this runs exclusively through `BASE_RPC_URL`: public
- * endpoints generally reject state overrides, and a rejection fails naming
- * the endpoint as the likely cause rather than reporting a failed sale.
+ * Print the raw return data; the assertion stops at non-empty, with the
+ * reason in a comment — no router ABI is pinned anywhere in the repo, and
+ * decoding would mean assuming an encoding the response never stated.
  */
 
 type Hex = `0x${string}`;
@@ -50,17 +60,26 @@ type Hex = `0x${string}`;
 /** 0.01 NVDA shares, in token base units. Well inside the sell band. */
 const SIM_TOKEN_UNITS = 1_000_000n;
 
-/** Single-block newest-first walk bound, for the holder search. */
-const HOLDER_SEARCH_BLOCKS = 30n;
+/**
+ * NVDA is quiet next to USDC, but the free-tier endpoint caps `eth_getLogs`
+ * at 10 blocks per request — so the window is walked in 10-block ranges.
+ * Fifty ranges cover 500 blocks for one extra sleep per range.
+ */
+const LOG_WINDOW_BLOCKS = 500n;
+const LOG_RANGE_BLOCKS = 10n;
+
+/** Cap on recipients carried into the batched reads. */
+const MAX_RECIPIENTS = 50;
 
 /** A second between aggregator requests. Nothing here is in a hurry. */
 const AGGREGATOR_DELAY_MS = 1_000;
 
 /**
- * A placeholder sender: a well-formed address assembled from one repeated
- * byte. Not transcribed from anywhere and not an account.
+ * The control sender: a well-formed address assembled from one repeated
+ * byte. It holds no key, no stock and no approval, so the same call from it
+ * must revert.
  */
-const SENDER = getAddress(`0x${"cd".repeat(20)}`);
+const STRANGER = getAddress(`0x${"cd".repeat(20)}`);
 
 /** `Transfer(address,address,uint256)`, as a fragment — the topic is derived. */
 const TRANSFER_ABI = [
@@ -100,28 +119,51 @@ const ALLOWANCE_ABI = [
   },
 ] as const;
 
-/** A distinctive nonzero sentinel for the allowance write-and-read-back. */
-const ALLOWANCE_SENTINEL = 123_456_789n;
+/**
+ * Multicall3 `aggregate`, as a fragment — one `eth_call` for a whole batch
+ * of view reads, so the recipient scan costs two requests instead of dozens
+ * against a rate-limited endpoint. The address is the verified genesis
+ * preinstall from `lib/rpc`, not a discovery.
+ */
+const MULTICALL_ABI = [
+  {
+    type: "function",
+    name: "aggregate",
+    stateMutability: "view",
+    inputs: [
+      {
+        name: "calls",
+        type: "tuple[]",
+        components: [
+          { name: "target", type: "address" },
+          { name: "callData", type: "bytes" },
+        ],
+      },
+    ],
+    outputs: [
+      { name: "blockNumber", type: "uint256" },
+      { name: "returnData", type: "bytes[]" },
+    ],
+  },
+] as const;
 
 const NVDA_ADDRESS = TOKEN_ADDRESSES.NVDA;
 const NVDA_DECIMALS = TOKEN_DECIMALS.NVDA;
 
 type TransferLog = {
   topics: string[];
-  transactionHash?: string;
 };
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/**
- * One raw JSON-RPC request. On a non-OK status the JSON-RPC error body is
- * kept — a 400 from Alchemy carries the specific reason, and discarding it
- * hides exactly what is needed to tell an over-wide range apart from an
- * unsupported override.
- */
-async function rpc(url: string, method: string, params: readonly unknown[]): Promise<unknown> {
+/** One raw JSON-RPC request. Throws with the endpoint's own message on error. */
+async function rpc(
+  url: string,
+  method: string,
+  params: readonly unknown[],
+): Promise<unknown> {
   const response = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -185,37 +227,31 @@ async function ethBlockNumber(url: string): Promise<bigint> {
   return hexToBigInt(await rpc(url, "eth_blockNumber", []));
 }
 
-async function ethGetLogs(
+async function ethGetLogsRange(
   url: string,
   address: string,
   topic0: string,
-  block: bigint,
+  fromBlock: bigint,
+  toBlock: bigint,
 ): Promise<TransferLog[]> {
   await sleep(READ_DELAY_MS);
-  const hexBlock = `0x${block.toString(16)}`;
   const result = (await rpc(url, "eth_getLogs", [
-    { address, topics: [topic0], fromBlock: hexBlock, toBlock: hexBlock },
+    {
+      address,
+      topics: [topic0],
+      fromBlock: `0x${fromBlock.toString(16)}`,
+      toBlock: `0x${toBlock.toString(16)}`,
+    },
   ])) as TransferLog[];
 
   if (!Array.isArray(result)) throw new Error("eth_getLogs returned no array");
   return result;
 }
 
-async function ethGetStorageAt(
+async function ethCallTx(
   url: string,
-  address: string,
-  position: Hex,
-  block: string = "latest",
+  tx: Record<string, unknown>,
 ): Promise<Hex> {
-  await sleep(READ_DELAY_MS);
-  const result = await rpc(url, "eth_getStorageAt", [address, position, block]);
-  if (typeof result !== "string" || !result.startsWith("0x")) {
-    throw new Error(`eth_getStorageAt returned ${String(result)}`);
-  }
-  return result as Hex;
-}
-
-async function ethCallTx(url: string, tx: Record<string, unknown>): Promise<Hex> {
   await sleep(READ_DELAY_MS);
   const result = await rpc(url, "eth_call", [tx, "latest"]);
   if (typeof result !== "string" || !result.startsWith("0x")) {
@@ -224,69 +260,55 @@ async function ethCallTx(url: string, tx: Record<string, unknown>): Promise<Hex>
   return result as Hex;
 }
 
-async function ethCallWithOverride(
-  url: string,
-  tx: Record<string, unknown>,
-  override: Record<string, unknown>,
-): Promise<Hex> {
-  await sleep(READ_DELAY_MS);
-  const result = await rpc(url, "eth_call", [tx, "latest", override]);
-  if (typeof result !== "string" || !result.startsWith("0x")) {
-    throw new Error(`eth_call returned ${String(result)}`);
-  }
-  return result as Hex;
-}
-
-async function ethCallView(
-  url: string,
-  to: string,
-  data: Hex,
-  block: string = "latest",
-): Promise<bigint> {
-  await sleep(READ_DELAY_MS);
-  const result = await rpc(url, "eth_call", [{ to, data }, block]);
-  if (typeof result !== "string" || !result.startsWith("0x")) {
-    throw new Error(`eth_call returned ${String(result)}`);
-  }
-  return hexToBigInt(result);
-}
-
-function overrideRejected(url: string, cause: unknown): Error {
-  return new Error(
-    `eth_call with state overrides was rejected by ${hostOf(url)} (${describeError(cause)}). ` +
-      "This usually means the RPC endpoint does not support state overrides — public Base " +
-      "endpoints generally do not. Set BASE_RPC_URL to a dedicated node that does and retry. " +
-      "This is an endpoint limitation, not a failed sale.",
-  );
-}
-
-/** `keccak256(abi.encode(holder, slot))` — the balances mapping location. */
-function balanceKeyFor(holder: string, slot: bigint): Hex {
-  return keccak256(
-    encodeAbiParameters(
-      [{ type: "address" }, { type: "uint256" }],
-      [holder as Hex, slot],
-    ),
-  );
-}
-
 /**
- * `keccak256(abi.encode(spender, keccak256(abi.encode(owner, slot))))` —
- * the nested allowance mapping location.
+ * One batched view read per recipient: `balanceOf` or
+ * `allowance(recipient, router)` down the same `recipients` order.
+ *
+ * `balanceOf` and `allowance` never revert for a well-formed address, so
+ * `aggregate` — which reverts the batch if any leg reverts — is safe here,
+ * and every recipient below came out of a log topic via `getAddress`.
  */
-function allowanceKeyFor(owner: string, spender: string, slot: bigint): Hex {
-  const inner = keccak256(
-    encodeAbiParameters(
-      [{ type: "address" }, { type: "uint256" }],
-      [owner as Hex, slot],
-    ),
+async function batchReadUint(
+  url: string,
+  recipients: string[],
+  kind: "balance" | "allowance",
+): Promise<bigint[]> {
+  const calls = recipients.map((recipient) => ({
+    target: NVDA_ADDRESS as Hex,
+    callData: encodeFunctionData({
+      abi: kind === "balance" ? BALANCE_OF_ABI : ALLOWANCE_ABI,
+      functionName: kind === "balance" ? "balanceOf" : "allowance",
+      args:
+        kind === "balance"
+          ? ([recipient as Hex] as const)
+          : ([recipient as Hex, KYBERSWAP_ROUTER_ADDRESS as Hex] as const),
+    }),
+  }));
+
+  const data = encodeFunctionData({
+    abi: MULTICALL_ABI,
+    functionName: "aggregate",
+    args: [calls],
+  });
+
+  await sleep(READ_DELAY_MS);
+  const result = await rpc(url, "eth_call", [
+    { to: MULTICALL3_ADDRESS, data },
+    "latest",
+  ]);
+  if (typeof result !== "string" || !result.startsWith("0x")) {
+    throw new Error(`multicall returned ${String(result)}`);
+  }
+
+  const [, returnDatas] = decodeAbiParameters(
+    [{ type: "uint256" }, { type: "bytes[]" }] as const,
+    result as Hex,
   );
-  return keccak256(
-    encodeAbiParameters(
-      [{ type: "address" }, { type: "bytes32" }],
-      [spender as Hex, inner],
-    ),
-  );
+
+  return returnDatas.map((raw) => {
+    const [value] = decodeAbiParameters([{ type: "uint256" }] as const, raw);
+    return value;
+  });
 }
 
 /** The `to` of a Transfer log: the last 20 bytes of the third topic. */
@@ -307,15 +329,15 @@ describe("the pinned router, executed for a sale against live Base state", () =>
     const dedicated = dedicatedRpcUrl();
     if (dedicated === null) {
       throw new Error(
-        "BASE_RPC_URL is not set. This script proves the sale with eth_call state overrides, " +
-          "which public Base endpoints generally reject — so it runs exclusively through the " +
-          "dedicated endpoint. Set BASE_RPC_URL to a node that supports overrides and retry.",
+        "BASE_RPC_URL is not set. This script reads live allowances in bulk, " +
+          "which public Base endpoints rate-limit after roughly a dozen calls — " +
+          "so it runs exclusively through the dedicated endpoint. Set BASE_RPC_URL and retry.",
       );
     }
     const url = dedicated;
     console.info(`  rpc ${hostOf(url)} (from BASE_RPC_URL)`);
 
-    // --- Step 1: a funded NVDA holder, found mechanically. ---
+    // --- Step 1: a real approver, found mechanically. ---
     const transferTopics = encodeEventTopics({ abi: TRANSFER_ABI, eventName: "Transfer" });
     const transferTopic0 = transferTopics[0];
     if (typeof transferTopic0 !== "string") {
@@ -324,110 +346,69 @@ describe("the pinned router, executed for a sale against live Base state", () =>
     console.info(`  Transfer topic ${transferTopic0} (derived, not literal)`);
 
     const latest = await ethBlockNumber(url);
-    // Pinned for steps 1–2: the holder is hot by construction, so its
-    // balance can move between two `latest` reads. Every balanceOf and
-    // eth_getStorageAt below reads at this one block.
-    const pinnedHex = `0x${latest.toString(16)}`;
-    console.info(`  scanning NVDA Transfers newest-first from block ${latest}`);
+    const fromBlock = latest - LOG_WINDOW_BLOCKS > 0n ? latest - LOG_WINDOW_BLOCKS : 0n;
+    console.info(`  scanning NVDA Transfers over blocks ${fromBlock}..${latest} in ${LOG_RANGE_BLOCKS}-block ranges`);
 
+    const logs: TransferLog[] = [];
+    for (let start = fromBlock; start <= latest; start += LOG_RANGE_BLOCKS) {
+      const end = start + LOG_RANGE_BLOCKS - 1n > latest ? latest : start + LOG_RANGE_BLOCKS - 1n;
+      logs.push(...(await ethGetLogsRange(url, NVDA_ADDRESS, transferTopic0, start, end)));
+    }
+    console.info(`  ${logs.length} Transfer logs in range`);
+    expect(logs.length, "no NVDA Transfers in range: widen the window").toBeGreaterThan(0);
+
+    // Newest-first, deduplicated, bounded — the batch reads below are one
+    // request per kind however many recipients there are.
+    const seen = new Set<string>();
+    const recipients: string[] = [];
+    for (let index = logs.length - 1; index >= 0; index -= 1) {
+      const log = logs[index];
+      if (log === undefined) continue;
+      const candidate = logRecipient(log);
+      if (candidate === null || seen.has(candidate)) continue;
+      seen.add(candidate);
+      recipients.push(candidate);
+      if (recipients.length >= MAX_RECIPIENTS) break;
+    }
+    console.info(`  ${recipients.length} unique recipients to check`);
+
+    const balances = await batchReadUint(url, recipients, "balance");
+    const allowances = await batchReadUint(url, recipients, "allowance");
+
+    // The simulation spends exactly SIM_TOKEN_UNITS, so both the stock and
+    // the approval must cover it — a funded holder with a spent approval
+    // proves nothing.
     let holder: string | null = null;
     let holderBalance = 0n;
-    let holderBlock = 0n;
-    for (let back = 0n; back < HOLDER_SEARCH_BLOCKS; back += 1n) {
-      const block = latest - back;
-      if (block < 0n) break;
-
-      const logs = await ethGetLogs(url, NVDA_ADDRESS, transferTopic0, block);
-      if (logs.length === 0) continue;
-
-      for (let index = logs.length - 1; index >= 0; index -= 1) {
-        const log = logs[index];
-        if (log === undefined) continue;
-        const candidate = logRecipient(log);
-        if (candidate === null) continue;
-
-        const data = encodeFunctionData({
-          abi: BALANCE_OF_ABI,
-          functionName: "balanceOf",
-          args: [candidate as Hex],
-        });
-        const balance = await ethCallView(url, NVDA_ADDRESS, data, pinnedHex);
-        if (balance > 0n) {
-          holder = candidate;
-          holderBalance = balance;
-          holderBlock = block;
-          break;
-        }
+    let holderAllowance = 0n;
+    for (let index = 0; index < recipients.length; index += 1) {
+      const candidate = recipients[index];
+      const balance = balances[index];
+      const allowance = allowances[index];
+      if (candidate === undefined || balance === undefined || allowance === undefined) {
+        continue;
       }
-
-      if (holder !== null) break;
+      if (balance >= SIM_TOKEN_UNITS && allowance >= SIM_TOKEN_UNITS) {
+        holder = candidate;
+        holderBalance = balance;
+        holderAllowance = allowance;
+        break;
+      }
     }
 
-    expect(holder, `no funded NVDA holder in the ${HOLDER_SEARCH_BLOCKS} blocks back from ${latest}`).not.toBeNull();
+    expect(
+      holder,
+      `no NVDA holder with ${SIM_TOKEN_UNITS} units and matching router approval among ${recipients.length} recent recipients: ` +
+        "without a live approval the sale cannot be executed against real state, and this " +
+        "script stops here rather than pretending. The sale still needs a live proof before it ships.",
+    ).not.toBeNull();
     if (holder === null) return;
     console.info(
-      `  holder ${holder} from block ${holderBlock} holds ${holderBalance} token units (${Number(holderBalance) / 10 ** NVDA_DECIMALS} shares, confirmed by balanceOf)`,
+      `  holder ${holder} holds ${holderBalance} units (${Number(holderBalance) / 10 ** NVDA_DECIMALS} shares) ` +
+        `with ${holderAllowance} approved to the router (both read live)`,
     );
 
-    // --- Step 2a: the token's balances slot, by proof — or an honest no. ---
-    const balanceMatches: number[] = [];
-    for (let slot = 0; slot <= 20; slot += 1) {
-      const position = balanceKeyFor(holder, BigInt(slot));
-      const stored = await ethGetStorageAt(url, NVDA_ADDRESS, position, pinnedHex);
-      if (hexToBigInt(stored) === holderBalance) balanceMatches.push(slot);
-    }
-
-    // The buy script proved USDC's storage is ordinary. A B20 precompile may
-    // keep balances in native client state that neither eth_getStorageAt nor
-    // stateDiff can see — in which case zero matches alongside a positive
-    // balanceOf is the finding, and everything below would be theatre.
-    expect(
-      balanceMatches.length > 0,
-      `no balances slot among 0..20 reads back ${holderBalance} while balanceOf does: ` +
-        "this B20 precompile keeps balances outside contract storage, so a stateDiff " +
-        "simulation cannot fund a sender and this script stops here rather than " +
-        "pretending. The sale still needs a live proof before it ships.",
-    ).toBe(true);
-    expect(
-      balanceMatches,
-      `balances slot search matched ${balanceMatches.length} of slots 0..20, expected exactly one`,
-    ).toHaveLength(1);
-    const balancesSlot = balanceMatches[0];
-    if (balancesSlot === undefined) return;
-    console.info(`  NVDA balances mapping is at slot index ${balancesSlot}`);
-
-    // --- Step 2b: the allowance slot, by write-and-read-back. ---
-    const allowanceData = encodeFunctionData({
-      abi: ALLOWANCE_ABI,
-      functionName: "allowance",
-      args: [SENDER, KYBERSWAP_ROUTER_ADDRESS as Hex],
-    });
-    const allowanceMatches: number[] = [];
-    for (let slot = 0; slot <= 20; slot += 1) {
-      const position = allowanceKeyFor(SENDER, KYBERSWAP_ROUTER_ADDRESS, BigInt(slot));
-      let readBack: bigint;
-      try {
-        const result = await ethCallWithOverride(
-          url,
-          { to: NVDA_ADDRESS, data: allowanceData },
-          { [NVDA_ADDRESS]: { stateDiff: { [position]: toHex(ALLOWANCE_SENTINEL, { size: 32 }) } } },
-        );
-        readBack = hexToBigInt(result);
-      } catch (cause) {
-        throw overrideRejected(url, cause);
-      }
-      if (readBack === ALLOWANCE_SENTINEL) allowanceMatches.push(slot);
-    }
-
-    expect(
-      allowanceMatches,
-      `allowance slot search matched ${allowanceMatches.length} of slots 0..20, expected exactly one`,
-    ).toHaveLength(1);
-    const allowanceSlot = allowanceMatches[0];
-    if (allowanceSlot === undefined) return;
-    console.info(`  NVDA allowance mapping is at slot index ${allowanceSlot}`);
-
-    // --- Step 3: a fresh sale route, built for the synthetic sender. ---
+    // --- Step 2: a fresh sale route, built for that sender. ---
     await sleep(AGGREGATOR_DELAY_MS);
     const { result, routeSummary } = await requestSellRoute("NVDA", SIM_TOKEN_UNITS);
 
@@ -454,7 +435,7 @@ describe("the pinned router, executed for a sale against live Base state", () =>
     const built = await buildSellSwap({
       quote,
       routeSummary,
-      sender: SENDER,
+      sender: holder,
       minAmountOut: floor,
     });
 
@@ -472,30 +453,14 @@ describe("the pinned router, executed for a sale against live Base state", () =>
     expect(tx.to, "to is not the pinned router").toBe(KYBERSWAP_ROUTER_ADDRESS);
     expect(tx.value, "a sale that would send ETH").toBe("0");
 
-    // --- Step 4: the same eth_call twice — with overrides, then without. ---
+    // --- Step 3: the same eth_call twice — approver, then stranger. ---
     //
-    // USDC storage only on the buy side; here, token storage only — never
-    // the token's code, because pools verify payment by balance delta and a
-    // stubbed token makes every pool revert.
-    const funded = tx.amountIn * 2n;
-    const balancePosition = balanceKeyFor(SENDER, BigInt(balancesSlot));
-    const allowancePosition = allowanceKeyFor(SENDER, KYBERSWAP_ROUTER_ADDRESS, BigInt(allowanceSlot));
-    const stateOverride = {
-      [NVDA_ADDRESS]: {
-        stateDiff: {
-          [balancePosition]: toHex(funded, { size: 32 }),
-          [allowancePosition]: toHex(funded, { size: 32 }),
-        },
-      },
-    };
-    const callTx = { from: SENDER, to: tx.to, data: tx.data, value: "0x0" };
-
-    let returnData: Hex;
-    try {
-      returnData = await ethCallWithOverride(url, callTx, stateOverride);
-    } catch (cause) {
-      throw overrideRejected(url, cause);
-    }
+    // No overrides anywhere: the holder's own balance and approval do the
+    // work, on live state. The stranger holds nothing and has approved
+    // nothing, so the identical call from it must revert — the pair is what
+    // proves the first call executed a swap rather than passing vacuously.
+    const fundedCall = { from: holder, to: tx.to, data: tx.data, value: "0x0" };
+    const returnData = await ethCallTx(url, fundedCall);
 
     console.info(`  simulation returned ${returnData}`);
     // The router's return shape is not verifiable from its ABI: no router
@@ -503,17 +468,24 @@ describe("the pinned router, executed for a sale against live Base state", () =>
     // assuming an encoding the response never stated. The assertion stops at
     // non-empty — success plus data, which is what separates an executed
     // sale from a call that merely did not revert.
-    expect(returnData, "simulation with funds returned no data").toMatch(/^0x([0-9a-fA-F]{2})+$/);
+    expect(returnData, "simulation from the approver returned no data").toMatch(
+      /^0x([0-9a-fA-F]{2})+$/,
+    );
 
     let reverted = false;
     let revertDetail = "";
     try {
-      const vacuous = await ethCallTx(url, callTx);
-      console.info(`  without overrides unexpectedly succeeded: ${vacuous}`);
+      const vacuous = await ethCallTx(url, {
+        from: STRANGER,
+        to: tx.to,
+        data: tx.data,
+        value: "0x0",
+      });
+      console.info(`  from the stranger unexpectedly succeeded: ${vacuous}`);
     } catch (cause) {
       reverted = true;
       revertDetail = describeError(cause);
-      console.info(`  without overrides reverted as expected: ${revertDetail}`);
+      console.info(`  from the stranger reverted as expected: ${revertDetail}`);
     }
 
     expect(reverted, "simulation without funds succeeded: the success above proves nothing").toBe(true);

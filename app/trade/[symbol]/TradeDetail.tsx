@@ -10,9 +10,12 @@ import { ConnectModal } from "@/components/ConnectModal";
 import { NairaAmount } from "@/components/NairaAmount";
 import { useClock } from "@/hooks/useClock";
 import { useQuote, type QuoteStatus, type UseQuoteResult } from "@/hooks/useQuote";
+import { useSellQuote, type UseSellQuoteResult } from "@/hooks/useSellQuote";
+import { useSellTrade, type UseSellTradeResult } from "@/hooks/useSellTrade";
 import { useStockPrices } from "@/hooks/useStockPrices";
+import { useTokenBalances } from "@/hooks/useTokenBalances";
 import { useTrade, type TradeFault, type UseTradeResult } from "@/hooks/useTrade";
-import { useWallet } from "@/hooks/useWallet";
+import { useWallet, type UseWalletResult } from "@/hooks/useWallet";
 import {
   formatBourseFee,
   formatFloor,
@@ -23,12 +26,16 @@ import {
   formatFeedAge,
   parseNgnAmount,
 } from "@/lib/format";
+import { scaleBigInt } from "@/lib/price";
 import { floorNgn } from "@/lib/quote-ngn";
 import { basescanTxUrl } from "@/lib/rpc";
 import {
   STOCK_TOKENS,
+  TOKEN_DECIMALS,
   USDC_DECIMALS,
+  isQuotableSymbol,
   type StockSymbol,
+  type StockToken,
 } from "@/lib/tokens";
 import type { TradeState, TradeStep } from "@/lib/trade-state";
 import type { WalletState } from "@/lib/wallet-state";
@@ -49,15 +56,24 @@ import type { WalletState } from "@/lib/wallet-state";
 
 const DEFAULT_AMOUNT = "50,000";
 
+/**
+ * The sell field starts at 0.01 shares — a couple of dollars, the size the
+ * sell probe was calibrated at. Same reasoning as the buy default: a
+ * prefilled amount arrives with real figures rather than dashes.
+ */
+const DEFAULT_SELL_AMOUNT = "0.01";
+
 export function TradeDetail({ symbol }: { symbol: StockSymbol }) {
   const token = STOCK_TOKENS[symbol];
   const { prices, ngnRate } = useStockPrices();
   const nowMs = useClock();
 
   const [amount, setAmount] = useState(DEFAULT_AMOUNT);
+  const [sellAmount, setSellAmount] = useState(DEFAULT_SELL_AMOUNT);
   const [tradeType, setTradeType] = useState<"Buy" | "Sell">("Buy");
   const [connectOpen, setConnectOpen] = useState(false);
   const ngn = parseNgnAmount(amount);
+  const sellShares = parseNgnAmount(sellAmount);
 
   const price = prices[symbol];
   const age = formatFeedAge(price.updatedAt, nowMs);
@@ -77,6 +93,26 @@ export function TradeDetail({ symbol }: { symbol: StockSymbol }) {
     refreshQuote: quote.refresh,
     wallet: wallet.state,
     owner: wallet.address,
+  });
+
+  // The sell flow, on the same hooks order: quote, then balances, then the
+  // trade that needs both. Always called — hooks cannot be conditional — and
+  // idle until shares are typed.
+  const sellQuote = useSellQuote({
+    symbol,
+    shares: sellShares,
+    usdToNgnRate: ngnRate,
+    referenceUsd: price.usd,
+  });
+  const { balances } = useTokenBalances(wallet.address);
+  const stockBalance = isQuotableSymbol(symbol) ? balances[symbol] : null;
+  const sellTrade = useSellTrade({
+    quote: sellQuote.sellQuote?.quote ?? null,
+    quoteExpired: sellQuote.expired,
+    refreshQuote: sellQuote.refresh,
+    wallet: wallet.state,
+    owner: wallet.address,
+    balance: stockBalance,
   });
 
   // The modal has done its job once an account is connected.
@@ -231,18 +267,18 @@ export function TradeDetail({ symbol }: { symbol: StockSymbol }) {
           </div>
 
           {tradeType === "Sell" ? (
-            <>
-              <p className="trade-note">
-                Selling is not available yet. Buying works now.
-              </p>
-              <button
-                type="button"
-                className="button button-dark full-width"
-                disabled
-              >
-                Sell {token.tokenSymbol}
-              </button>
-            </>
+            <SellView
+              token={token}
+              symbol={symbol}
+              sellAmount={sellAmount}
+              onSellAmountChange={setSellAmount}
+              sellQuote={sellQuote}
+              sellTrade={sellTrade}
+              stockBalance={stockBalance}
+              wallet={wallet}
+              ngnRate={ngnRate}
+              onConnect={() => setConnectOpen(true)}
+            />
           ) : (
             <>
               <label className="field-label" htmlFor="trade-amount">
@@ -420,6 +456,444 @@ export function TradeDetail({ symbol }: { symbol: StockSymbol }) {
       />
     </AppShell>
   );
+}
+
+/**
+ * The sale half of the panel, in the same trade-panel vocabulary as the buy
+ * half: amount, estimate rows, breakdown, status, signatures, button, moment.
+ * Every figure comes from the sell quote and the sell flow; the copy mirrors
+ * the buy sentences with the direction flipped, because a sale that reads
+ * like a purchase would misstate what leaves the wallet.
+ */
+function SellView({
+  token,
+  symbol,
+  sellAmount,
+  onSellAmountChange,
+  sellQuote,
+  sellTrade,
+  stockBalance,
+  wallet,
+  ngnRate,
+  onConnect,
+}: {
+  token: StockToken;
+  symbol: StockSymbol;
+  sellAmount: string;
+  onSellAmountChange: (value: string) => void;
+  sellQuote: UseSellQuoteResult;
+  sellTrade: UseSellTradeResult;
+  stockBalance: bigint | null;
+  wallet: UseWalletResult;
+  ngnRate: number | null;
+  onConnect: () => void;
+}) {
+  const sq = sellQuote.sellQuote;
+  const state = sellTrade.state;
+
+  const decimals = isQuotableSymbol(symbol) ? TOKEN_DECIMALS[symbol] : null;
+  const availableShares =
+    stockBalance === null || decimals === null
+      ? null
+      : scaleBigInt(stockBalance, decimals);
+
+  // The USDC floor in naira: what the fewest proceeds are worth at the price
+  // this quote was struck at. Null propagates rather than becoming zero.
+  const floorNgnValue =
+    sellTrade.minAmountOut === null || ngnRate === null
+      ? null
+      : (Number(sellTrade.minAmountOut) / 10 ** USDC_DECIMALS) * ngnRate;
+
+  const press = sellPanelAction(state, token.tokenSymbol, sq, sellTrade);
+  const note = sellSignatureNote(state, sq, token.tokenSymbol);
+  const moment = sellMomentCopy(state, sellTrade.fault, sellTrade.repriced);
+  const hash = txHash(state, sellTrade.approvalHash, sellTrade.swapHash);
+  const tone = momentTone(state, sellTrade.fault, sellTrade.repriced);
+
+  const lowEth =
+    (wallet.state.kind === "ready" || wallet.state.kind === "no-usdc") &&
+    wallet.state.lowEth;
+
+  return (
+    <>
+      <label className="field-label" htmlFor="sell-amount">
+        Amount in shares{" "}
+        <span>
+          Available{" "}
+          {availableShares === null
+            ? "—"
+            : `${formatShares(availableShares)} shares`}
+        </span>
+      </label>
+      <div className="trade-input">
+        <input
+          id="sell-amount"
+          value={sellAmount}
+          onChange={(event) => onSellAmountChange(event.target.value)}
+          inputMode="decimal"
+          autoComplete="off"
+          spellCheck={false}
+          aria-describedby="sell-amount-status"
+        />
+      </div>
+
+      <div className="estimate-row">
+        <span>You&apos;ll receive (estimate)</span>
+        <strong>{formatNGNAmount(sq?.usdcOutNgn ?? null)}</strong>
+      </div>
+      <div className="estimate-row">
+        <span>Least you&apos;ll receive</span>
+        <strong>{formatNGNAmount(floorNgnValue)}</strong>
+      </div>
+      <div className="estimate-row">
+        <span>Premium vs reference</span>
+        <strong>{formatPremiumBps(sq?.premiumBps ?? null)}</strong>
+      </div>
+      <div className="estimate-row">
+        <span>Market spread</span>
+        <strong>
+          {formatSpread(
+            sq?.spreadNgn ?? null,
+            sq?.quote.executionCostBps ?? null,
+          )}
+        </strong>
+      </div>
+      <div className="estimate-row">
+        <span>Bourse fee</span>
+        <strong>{formatBourseFee(sq?.feeNgn ?? null)}</strong>
+      </div>
+
+      <div className="trade-breakdown">
+        <span>
+          <span>Rate</span>
+          <strong>
+            1 {token.tokenSymbol} = {formatNGNAmount(sq?.ngnPerShare ?? null)}
+          </strong>
+        </span>
+        <span>
+          <span>Network fee</span>
+          <strong>≈ {formatNGNAmount(sq?.gasNgn ?? null)}</strong>
+        </span>
+        <span>
+          <span>Quote held for</span>
+          <strong className="countdown">
+            {countdown(sellQuote.secondsRemaining)}
+          </strong>
+        </span>
+      </div>
+
+      <p id="sell-amount-status" className="trade-note" aria-live="polite">
+        {sellStatusCopy(sellQuote)}
+      </p>
+
+      {note === null ? null : <p className="trade-note">{note}</p>}
+
+      {/* A warning, never a gate: the button below stays pressable. */}
+      {lowEth ? (
+        <p className="trade-note countdown">
+          The ETH in this wallet is low. A sale is two transactions — an
+          approval, then the sale — and there is not much room here for the
+          second one if fees rise between them. A little more ETH avoids that.
+        </p>
+      ) : null}
+
+      {press === null ? null : (
+        <button
+          type="button"
+          className="button button-dark full-width"
+          disabled={!press.enabled}
+          onClick={() => {
+            if (press.press === "connect") {
+              onConnect();
+            } else if (press.press === "retry") {
+              sellTrade.retry();
+            } else {
+              sellTrade.submit();
+            }
+          }}
+        >
+          {press.label} <ArrowRight size={16} />
+        </button>
+      )}
+
+      {state?.kind === "blocked" && state.wallet === "wrong-chain" ? (
+        <p className="trade-note">
+          <button
+            type="button"
+            className="text-link"
+            onClick={wallet.switchToBase}
+            disabled={wallet.switching}
+          >
+            {wallet.switching ? "Switching…" : "Switch to Base"}
+            <ArrowRight size={15} />
+          </button>
+        </p>
+      ) : null}
+      {state?.kind === "blocked" &&
+      state.wallet === "balances-unreadable" ? (
+        <p className="trade-note">
+          <button
+            type="button"
+            className="text-link"
+            onClick={wallet.refetchBalances}
+          >
+            Check again <ArrowRight size={15} />
+          </button>
+        </p>
+      ) : null}
+
+      {moment === null && hash === null ? null : (
+        <p
+          className={
+            tone === "plain"
+              ? "trade-note"
+              : `trade-note ${tone === "positive" ? "positive" : tone === "negative" ? "negative" : "countdown"}`
+          }
+          aria-live="polite"
+        >
+          {moment}{" "}
+          {hash === null ? null : (
+            <a
+              className="text-link"
+              href={basescanTxUrl(hash)}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              View transaction
+            </a>
+          )}
+        </p>
+      )}
+
+      <p className="trade-note">
+        You&apos;ll review the full quote before signing in your wallet.
+      </p>
+    </>
+  );
+}
+
+type SellPanelAction = {
+  label: string;
+  enabled: boolean;
+  press: "submit" | "retry" | "connect";
+};
+
+/** The one sell button. Waiting states say what is being waited for. */
+function sellPanelAction(
+  state: TradeState | null,
+  tokenSymbol: string,
+  sq: UseSellQuoteResult["sellQuote"],
+  sellTrade: UseSellTradeResult,
+): SellPanelAction | null {
+  if (state === null) return null;
+
+  switch (state.kind) {
+    case "blocked":
+      if (state.wallet === "disconnected" || state.wallet === "no-wallet") {
+        return { label: "Connect a wallet to sell", enabled: true, press: "connect" };
+      }
+      return { label: blockedLabel(state.wallet), enabled: false, press: "submit" };
+    case "quote-expired":
+      return { label: "Get a new price", enabled: true, press: "submit" };
+    case "checking-allowance":
+      return { label: "Checking your permission", enabled: false, press: "submit" };
+    case "insufficient-balance":
+      return {
+        label: `Not enough ${tokenSymbol} to sell`,
+        enabled: false,
+        press: "submit",
+      };
+    case "needs-approval":
+      return {
+        label:
+          sq === null
+            ? "Approve this amount"
+            : `Approve ${formatShares(sq.quote.sharesIn)} ${tokenSymbol}`,
+        enabled: true,
+        press: "submit",
+      };
+    case "approving":
+      return { label: "Approve it in your wallet", enabled: false, press: "submit" };
+    case "approval-confirming":
+      return { label: "Recording your permission", enabled: false, press: "submit" };
+    case "ready":
+      if (sellTrade.awaitingReprice) {
+        return { label: "Getting the new price", enabled: false, press: "submit" };
+      }
+      return sellTrade.repriced
+        ? { label: "Sell at this new price", enabled: true, press: "submit" }
+        : { label: `Sell ${tokenSymbol}`, enabled: true, press: "submit" };
+    case "building":
+      return { label: "Getting the final price", enabled: false, press: "submit" };
+    case "signing":
+      return { label: "Confirm the sale in your wallet", enabled: false, press: "submit" };
+    case "confirming":
+      return { label: "Your sale is going through", enabled: false, press: "submit" };
+    case "confirmed":
+      return { label: "Sell again", enabled: true, press: "retry" };
+    case "rejected":
+      return { label: "Try again", enabled: true, press: "retry" };
+    case "reverted":
+      return { label: "Try again with a new price", enabled: true, press: "retry" };
+    case "failed":
+      if (sellTrade.fault?.kind === "unsafe-build") return null;
+      return { label: "Try again", enabled: true, press: "retry" };
+  }
+}
+
+/** The line under the shares field. The price, never the sale. */
+function sellStatusCopy({
+  status,
+  minShares,
+  maxShares,
+  expired,
+}: UseSellQuoteResult): string | null {
+  switch (status) {
+    case "idle":
+      return "Enter shares to see what they sell for.";
+    case "unquotable":
+      return "This stock is issued on Base but has no pool yet, so it cannot be sold here.";
+    case "too-small":
+      return minShares === null
+        ? "That is less than we can price."
+        : `The smallest amount we can price is ${formatShares(minShares)} shares.`;
+    case "too-large":
+      return maxShares === null
+        ? "That is more than we can price."
+        : `The largest amount we can price is ${formatShares(maxShares)} shares.`;
+    case "loading":
+      return "Getting a price.";
+    case "quote":
+      return expired ? "Getting a fresh price." : null;
+    case "no-liquidity":
+      return "There is no route for this amount right now. A smaller amount may still go through.";
+    case "failed":
+      return "We could not get a price just now.";
+  }
+}
+
+/** Before the first prompt, never after it. */
+function sellSignatureNote(
+  state: TradeState | null,
+  sq: UseSellQuoteResult["sellQuote"],
+  tokenSymbol: string,
+): string | null {
+  if (state === null) return null;
+
+  const amount =
+    sq === null
+      ? "this amount"
+      : `${formatShares(sq.quote.sharesIn)} ${tokenSymbol}`;
+
+  switch (state.kind) {
+    case "needs-approval":
+      return (
+        `This sale takes two signatures. The first permits ${amount} of your ` +
+        "stock and no more — it is not an unlimited allowance. The second sells them."
+      );
+    case "approving":
+      return (
+        `The first of the two: permission for ${amount}, and nothing beyond it. ` +
+        "The second signature is the sale itself."
+      );
+    case "approval-confirming":
+      return "That was the first of two signatures. The sale is the second.";
+    case "ready":
+      return (
+        "One signature. Permission for this amount is already in place, so the only " +
+        "thing left to sign is the sale."
+      );
+    default:
+      return null;
+  }
+}
+
+/** What just happened, in one sentence. Every ending says what left the wallet. */
+function sellMomentCopy(
+  state: TradeState | null,
+  fault: TradeFault | null,
+  repriced: boolean,
+): string | null {
+  if (state === null) return null;
+
+  switch (state.kind) {
+    case "blocked":
+    case "checking-allowance":
+    case "insufficient-balance":
+    case "needs-approval":
+    case "approving":
+    case "building":
+    case "signing":
+      return null;
+    case "quote-expired":
+      return "That price has run out. A new one is on its way.";
+    case "approval-confirming":
+      return "Base is recording your permission. This usually takes a few seconds.";
+    case "ready":
+      return repriced
+        ? "The price moved while your sale was being put together, so nothing was sent and the figures above are a fresh quote. Sell again if they still work for you."
+        : null;
+    case "confirming":
+      return "Your sale is on Base and usually settles within a few seconds.";
+    case "confirmed":
+      return "Sold. The USDC is in your wallet.";
+    case "reverted":
+      return sellRevertedCopy(state.step);
+    case "rejected":
+      return state.step === "approval"
+        ? "You declined the permission in your wallet. Nothing was spent."
+        : "You declined the sale in your wallet. Nothing was spent.";
+    case "failed":
+      return fault === null ? sellLostCopy(state.step) : sellFaultCopy(fault);
+  }
+}
+
+function sellRevertedCopy(step: TradeStep): string {
+  if (step === "approval") {
+    return (
+      "The permission reached Base and did not go through. Its network fee was " +
+      "spent, and your stock was not touched. Signing it again usually works."
+    );
+  }
+
+  return (
+    "Your sale reached Base and did not go through. The network fee for it was " +
+    "spent; nothing else left your wallet. The usual cause is the price moving past " +
+    "the floor above while the transaction was in flight, so the answer is a new " +
+    "price rather than the same one again."
+  );
+}
+
+function sellLostCopy(step: TradeStep): string {
+  if (step === "approval") {
+    return (
+      "We lost track of the permission transaction. Check it on Basescan before " +
+      "signing again — if it went through, you will not need to."
+    );
+  }
+
+  return (
+    "We lost track of your sale, so we cannot say whether it settled. Check it " +
+    "on Basescan before selling again."
+  );
+}
+
+function sellFaultCopy(fault: TradeFault): string {
+  switch (fault.kind) {
+    case "unsafe-build":
+      return (
+        "The sale we were handed did not match the exchange Bourse is pinned to, " +
+        "so we did not sign it. Nothing was spent. Reload this page before trying " +
+        "again — we will not send a transaction we cannot verify."
+      );
+    case "no-route":
+      return (
+        "There is no route for this amount right now. Nothing was signed. A smaller " +
+        "amount may still go through."
+      );
+    case "build-failed":
+      return "We could not put the sale together. Nothing was signed and nothing was spent.";
+  }
 }
 
 /** Their `00:30` countdown, from live seconds. `—` with no quote held. */
