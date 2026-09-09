@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useState } from "react";
 import {
@@ -14,7 +15,8 @@ import {
 
 import { useClock } from "@/hooks/useClock";
 import { useNGNRate } from "@/hooks/useNGNRate";
-import { formatFeedAge, formatNGNAmount } from "@/lib/format";
+import { revealClass, useReveal } from "@/hooks/useReveal";
+import { formatFeedAge, formatNGNAmount, formatUSD } from "@/lib/format";
 import { withMarketPrice, withNgnRate, type StockPrice } from "@/lib/price";
 import {
   STOCK_LIST,
@@ -23,8 +25,16 @@ import {
 } from "@/lib/tokens";
 import type { TradeabilityReports } from "@/lib/tradeability";
 
-import { Mark } from "./Brand";
+import { Mark, logoPath } from "./Brand";
 import CookieConsent from "./CookieConsent";
+
+// Client-only and split out: the landing's first paint must not carry the
+// wallet SDK. This loads lazily in the browser and either forwards a
+// reconnected wallet to the dashboard or renders nothing.
+const ReturnRedirect = dynamic(
+  () => import("./ReturnRedirect").then((module) => module.ReturnRedirect),
+  { ssr: false },
+);
 import { NairaAmount } from "./NairaAmount";
 import { StockCard } from "./StockCard";
 
@@ -51,6 +61,15 @@ export function LandingContent({
   const { rate } = useNGNRate();
   const nowMs = useClock(readAtMs);
   const [saved, setSaved] = useState<ReadonlySet<StockSymbol>>(new Set());
+
+  // One reveal per below-fold section. Hero keeps its load entrance and the
+  // ticker runs continuously — neither gets a scroll reveal on top.
+  const story = useReveal<HTMLElement>();
+  const preview = useReveal<HTMLElement>();
+  const trust = useReveal<HTMLElement>();
+  const ownership = useReveal<HTMLElement>();
+  const journey = useReveal<HTMLElement>();
+  const closing = useReveal<HTMLElement>();
 
   const toggleSaved = (symbol: StockSymbol) => {
     setSaved((previous) => {
@@ -84,6 +103,7 @@ export function LandingContent({
 
   return (
     <div className="landing">
+      <ReturnRedirect />
       <header className="site-header">
         <Link href="/" className="brand-lockup">
           <Mark size={32} />
@@ -108,9 +128,6 @@ export function LandingContent({
         <section className="hero" style={{ backgroundImage: "url(/hero.webp)" }}>
           <div className="hero-wash" />
           <div className="hero-content">
-            <div className="eyebrow">
-              <span className="eyebrow-dot" /> NAIRA → GLOBAL OWNERSHIP
-            </div>
             <h1>
               Own a piece
               <br />
@@ -121,7 +138,7 @@ export function LandingContent({
               dollar account required.
             </p>
             <div className="hero-actions">
-              <Link href="/markets" className="button button-dark">
+              <Link href="/login" className="button button-dark">
                 Explore markets <ArrowUpRight size={17} />
               </Link>
               <a className="text-link" href="#how-it-works">
@@ -147,10 +164,10 @@ export function LandingContent({
                       className="ticker-item"
                       key={`${stock.symbol}-${index}`}
                     >
-                      {stock.symbol === "META" ? null : (
+                      {logoPath(stock.symbol) === null ? null : (
                         <img
                           className="ticker-logo"
-                          src={`/logos/${stock.symbol}.svg`}
+                          src={logoPath(stock.symbol) as string}
                           alt=""
                         />
                       )}
@@ -171,7 +188,11 @@ export function LandingContent({
           </section>
         ) : null}
 
-        <section className="story-section" id="how-it-works">
+        <section
+          ref={story.ref}
+          className={revealClass(story.visible, "story-section")}
+          id="how-it-works"
+        >
           <div className="section-intro">
             <div className="eyebrow">HOW IT WORKS</div>
             <h2>
@@ -215,7 +236,11 @@ export function LandingContent({
           </div>
         </section>
 
-        <section className="market-preview" id="market-preview">
+        <section
+          ref={preview.ref}
+          className={revealClass(preview.visible, "market-preview")}
+          id="market-preview"
+        >
           <div className="section-heading">
             <div>
               <div className="eyebrow">THE MARKET</div>
@@ -225,7 +250,7 @@ export function LandingContent({
                 <em>Access you didn’t have.</em>
               </h2>
             </div>
-            <Link href="/markets" className="button button-outline">
+            <Link href="/login" className="button button-outline">
               View all markets <ArrowRight size={15} />
             </Link>
           </div>
@@ -246,7 +271,11 @@ export function LandingContent({
           </div>
         </section>
 
-        <section className="trust-section" id="trust">
+        <section
+          ref={trust.ref}
+          className={revealClass(trust.visible, "trust-section")}
+          id="trust"
+        >
           <div className="trust-panel">
             <div className="eyebrow">DESIGNED FOR CONFIDENCE</div>
             <h2>
@@ -289,8 +318,12 @@ export function LandingContent({
                 </span>
               </div>
               <strong>
-                {featured === null ? (
-                  "—"
+                {featured === null || prices[featured.symbol].ngn == null ? (
+                  featured !== null && prices[featured.symbol].usd != null ? (
+                    formatUSD(prices[featured.symbol].usd as number)
+                  ) : (
+                    "—"
+                  )
                 ) : (
                   <NairaAmount
                     value={formatNGNAmount(prices[featured.symbol].ngn)}
@@ -300,16 +333,27 @@ export function LandingContent({
                   </NairaAmount>
                 )}
               </strong>
+              {/* Never blank: without a naira rate the reference still shows
+                  in dollars with the reason stated, instead of a bare dash. */}
               <em>
-                {featuredAge === null
-                  ? "No reference price yet"
-                  : `Reference ${featuredAge}`}
+                {featured === null || prices[featured.symbol].ngn == null
+                  ? (
+                    featured !== null && prices[featured.symbol].usd != null
+                      ? "Naira rate loading."
+                      : "No reference price yet"
+                  )
+                  : featuredAge === null
+                    ? "Reference price"
+                    : `Reference ${featuredAge}`}
               </em>
             </div>
           </div>
         </section>
 
-        <section className="ownership-section">
+        <section
+          ref={ownership.ref}
+          className={revealClass(ownership.visible, "ownership-section")}
+        >
           <div className="ownership-copy">
             <div className="eyebrow">A DIFFERENT KIND OF ACCESS</div>
             <h2>
@@ -366,7 +410,10 @@ export function LandingContent({
           </div>
         </section>
 
-        <section className="journey-section">
+        <section
+          ref={journey.ref}
+          className={revealClass(journey.visible, "journey-section")}
+        >
           <div className="journey-heading">
             <div className="eyebrow">THE BOURSE JOURNEY</div>
             <h2>
@@ -402,7 +449,10 @@ export function LandingContent({
       </main>
 
       <footer className="editorial-footer">
-        <section className="editorial-cta">
+        <section
+          ref={closing.ref}
+          className={revealClass(closing.visible, "editorial-cta")}
+        >
           <div className="eyebrow">YOUR NEXT MOVE</div>
           <h2>
             Global access.
@@ -455,27 +505,11 @@ export function LandingContent({
               <Link href="/terms">Terms</Link>
             </div>
           </div>
-          <div className="editorial-status">
-            <span>
-              <i /> All systems operational
-            </span>
-            <span>Built on Base · Powered by tokenized stocks</span>
-          </div>
         </div>
-        <div
-          className="editorial-city-art"
-          role="img"
-          aria-label="City skyline"
-          style={{ backgroundImage: "url(/footer-city.webp)" }}
-        />
-        <div className="editorial-footer-bottom">
+        <div className="editorial-footer-bottom solo">
           <span>
             Tokenized stocks involve risk. This is not financial advice.
           </span>
-          <div className="footer-links">
-            <Link href="/privacy">Privacy</Link>
-            <Link href="/terms">Terms</Link>
-          </div>
         </div>
       </footer>
 
