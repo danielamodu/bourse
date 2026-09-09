@@ -12,7 +12,9 @@
 const LOGO_PATHS: Record<string, string> = {
   AAPL: "/logos/AAPL.svg",
   AMZN: "/logos/AMZN.svg",
+  CRCL: "/logos/CRCL.svg",
   GOOGL: "/logos/GOOGL.svg",
+  INTC: "/logos/INTC.svg",
   META: "/logos/META.svg",
   MSFT: "/logos/MSFT.svg",
   MSTR: "/logos/MSTR.svg",
@@ -24,7 +26,9 @@ const LOGO_PATHS: Record<string, string> = {
 /**
  * Badge grounds from the ported design for the original six; neutral
  * graphite for the marks added since, whose brand colors were never part
- * of the system. SNDK has no published mark and keeps the letter badge.
+ * of the system. COIN and SNDK have no published mark and keep the letter
+ * badge — the Coinbase wordmark is illegible at badge size, and inventing
+ * or cropping brand art would be worse than an honest initial.
  */
 const BADGE_COLORS: Record<string, string> = {
   AAPL: "#151617",
@@ -36,6 +40,8 @@ const BADGE_COLORS: Record<string, string> = {
   META: "#5B5E62",
   MSTR: "#5B5E62",
   SPCX: "#5B5E62",
+  CRCL: "#5B5E62",
+  INTC: "#5B5E62",
 };
 
 /**
