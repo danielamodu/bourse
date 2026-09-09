@@ -9,6 +9,7 @@ import {
   Clock3,
   LayoutDashboard,
   Settings,
+  Sprout,
 } from "lucide-react";
 
 import { formatAddressShort } from "@/lib/format";
@@ -35,9 +36,13 @@ export function AppShell({
 }) {
   const pathname = usePathname();
 
+  // Five entries; the mobile bar shows the first four, so History is
+  // desktop-only there. Earn carries live data and wins the mobile slot over
+  // a history shell that currently states it is unavailable.
   const navItems = [
     { href: "/markets", label: "Markets", icon: BarChart3 },
     { href: "/portfolio", label: "Portfolio", icon: LayoutDashboard },
+    { href: "/earn", label: "Earn", icon: Sprout },
     { href: "/funding", label: "Funding", icon: ArrowUpRight },
     { href: "/history", label: "History", icon: Clock3 },
   ];
