@@ -26,7 +26,8 @@ const EXAMPLE_PRINCIPAL_NGN = 100_000;
 
 export default function EarnPage() {
   return (
-    <AppShell walletAddress={null}>
+    <AppShell>
+      {/* No address: the shell resolves the chip live instead of hardcoding it. */}
       <div className="page-header">
         <div>
           <div className="eyebrow">EARN / PREVIEW</div>

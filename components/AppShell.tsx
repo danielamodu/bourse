@@ -1,5 +1,6 @@
 "use client";
 
+import { default as nextDynamic } from "next/dynamic";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
@@ -16,6 +17,14 @@ import { formatAddressShort } from "@/lib/format";
 
 import { Mark } from "./Brand";
 
+// Client-only and split out: pages without a wallet of their own must not
+// carry the wallet SDK on first paint. Loads lazily and resolves the chip
+// live in the browser; see `SidebarWallet`.
+const SidebarWallet = nextDynamic(
+  () => import("./SidebarWallet").then((module) => module.SidebarWallet),
+  { ssr: false },
+);
+
 /**
  * The app frame, in the ported `app-shell` visual: sidebar on desktop,
  * header plus bottom nav on mobile.
@@ -31,8 +40,11 @@ export function AppShell({
   walletAddress,
 }: {
   children: ReactNode;
-  /** Connected address, or null where no wallet is known (light pages). */
-  walletAddress: string | null;
+  /**
+   * Connected address, null where no wallet is known, or undefined on light
+   * pages — which render the live island instead of a hardcoded answer.
+   */
+  walletAddress?: string | null;
 }) {
   const pathname = usePathname();
 
@@ -74,7 +86,9 @@ export function AppShell({
         </div>
         <div className="wallet-chip">
           <span className="wallet-avatar">0x</span>
-          {walletAddress === null ? (
+          {walletAddress === undefined ? (
+            <SidebarWallet />
+          ) : walletAddress === null ? (
             <div>
               <strong>
                 <Link href="/login">Connect wallet</Link>

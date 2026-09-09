@@ -10,7 +10,8 @@ import { AppShell } from "@/components/AppShell";
  */
 export default function FundingPage() {
   return (
-    <AppShell walletAddress={null}>
+    <AppShell>
+      {/* No address: the shell resolves the chip live instead of hardcoding it. */}
       <div className="page-header">
         <div>
           <div className="eyebrow">FUNDING / ₦ ↔ USDC</div>

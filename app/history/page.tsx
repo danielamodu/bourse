@@ -7,7 +7,8 @@ import { AppShell } from "@/components/AppShell";
  */
 export default function HistoryPage() {
   return (
-    <AppShell walletAddress={null}>
+    <AppShell>
+      {/* No address: the shell resolves the chip live instead of hardcoding it. */}
       <div className="page-header">
         <div>
           <div className="eyebrow">HISTORY / ACTIVITY</div>

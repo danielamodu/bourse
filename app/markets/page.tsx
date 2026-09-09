@@ -31,10 +31,10 @@ import { MarketsGrid } from "./MarketsGrid";
 export const dynamic = "force-dynamic";
 
 export default function MarketsPage() {
-  // walletAddress null: this page reads no account, so the shell links out
-  // to connect rather than showing one.
+  // No address: this page reads no account, so the shell resolves the chip
+  // live instead of hardcoding it.
   return (
-    <AppShell walletAddress={null}>
+    <AppShell>
       <MarketsGateLoader />
       <div className="page-header">
         <div>
